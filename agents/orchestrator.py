@@ -49,6 +49,15 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
         history=prof_gemini_history,
         temperature=PROF_TEMP,
     )
+    
+    # Hata kontrolü
+    if prof_response is None:
+        error_msg = {"role": "system", "name": "Sistem ⚠️", "content": "API hatası: Tartışma başlatılamadı. Lütfen API key'inizi kontrol edin veya farklı bir model deneyin."}
+        debate_history.append(error_msg)
+        if on_message:
+            on_message(**error_msg)
+        return debate_history
+    
     prof_gemini_history.append({"role": "model", "content": prof_response})
 
     msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
@@ -66,6 +75,15 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
             history=student_gemini_history,
             temperature=STUDENT_TEMP,
         )
+        
+        # Hata kontrolü
+        if student_response is None:
+            error_msg = {"role": "system", "name": "Sistem ⚠️", "content": f"API hatası: Tartışma {round_num+1}. turda durdu."}
+            debate_history.append(error_msg)
+            if on_message:
+                on_message(**error_msg)
+            return debate_history
+        
         student_gemini_history.append({"role": "model", "content": student_response})
 
         msg = {"role": "student", "name": "Öğrenci 🙋", "content": student_response}
@@ -83,6 +101,15 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
                 history=prof_gemini_history,
                 temperature=PROF_TEMP,
             )
+            
+            # Hata kontrolü
+            if prof_response is None:
+                error_msg = {"role": "system", "name": "Sistem ⚠️", "content": f"API hatası: Tartışma {round_num+1}. turda durdu."}
+                debate_history.append(error_msg)
+                if on_message:
+                    on_message(**error_msg)
+                return debate_history
+            
             prof_gemini_history.append({"role": "model", "content": prof_response})
 
             msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
@@ -115,6 +142,10 @@ def inject_user_question(
         history=prof_gemini_history,
         temperature=PROF_TEMP,
     )
+    
+    if prof_response is None:
+        return None  # Hata sinyali
+    
     prof_gemini_history.append({"role": "model", "content": prof_response})
 
     msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
@@ -139,10 +170,13 @@ if __name__ == "__main__":
     print("-" * 60)
 
     def print_message(role, name, content):
-        color = "\033[94m" if role == "professor" else "\033[92m"
-        reset = "\033[0m"
-        print(f"\n{color}{name}{reset}")
-        print(f"{content}")
+        if role == "system":
+            print(f"\n⚠️ {content}")
+        else:
+            color = "\033[94m" if role == "professor" else "\033[92m"
+            reset = "\033[0m"
+            print(f"\n{color}{name}{reset}")
+            print(f"{content}")
         print("-" * 60)
 
     run_debate(topic, num_rounds=3, on_message=print_message)

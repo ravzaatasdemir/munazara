@@ -17,7 +17,7 @@ load_dotenv()
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Kullanılacak model — ücretsiz katman için Flash
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-pro-latest"
 
 
 def chat(
@@ -25,7 +25,7 @@ def chat(
     history: list[dict],
     temperature: float = 0.7,
     max_tokens: int = 500,
-) -> str:
+):
     """
     Gemini'a mesaj gönder, cevap al.
 
@@ -36,7 +36,7 @@ def chat(
         max_tokens: Maksimum cevap uzunluğu
 
     Returns:
-        Gemini'ın cevap metni (str)
+        Gemini'ın cevap metni (str) veya None (hata durumunda)
     """
     # History'yi Gemini formatına çevir
     contents = []
@@ -65,12 +65,22 @@ def chat(
             )
             return response.text or "(boş cevap)"
         except Exception as e:
+            error_msg = str(e)
+            
+            # Kota hatası ise direkt None dön, retry yapma
+            if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
+                print(f"\n⚠️ API kotası bitti. Lütfen farklı bir API key veya model deneyin.")
+                return None  # Orchestrator'a hata sinyali
+            
+            # Diğer hatalar için retry
             if attempt < 2:
                 wait = 2 ** attempt  # 1s, 2s
                 print(f"  ⚠ API hatası, {wait}s sonra tekrar: {e}")
                 time.sleep(wait)
             else:
-                return f"(API hatası: {e})"
+                # 3 denemede de başarısız
+                print(f"\n❌ API hatası (3 deneme sonrası): {e}\n")
+                return None
 
 
 # ========== HIZLI TEST ==========
@@ -87,4 +97,8 @@ if __name__ == "__main__":
         history=[{"role": "user", "content": "Merhaba, çalışıyor musun?"}],
         temperature=0.5,
     )
-    print(f"Gemini cevabı:\n{result}")
+    
+    if result is None:
+        print("❌ Test başarısız — API hatası.")
+    else:
+        print(f"✅ Test başarılı!\nGemini cevabı:\n{result}")
