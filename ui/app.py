@@ -1,5 +1,5 @@
 """
-Münazara — Streamlit Arayüzü
+Münazara — Streamlit Arayüzü (İnteraktif Mod)
 
 Çalıştırmak için: streamlit run ui/app.py
 Kişi B bu dosyayı yönetir.
@@ -12,7 +12,8 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
-from agents.orchestrator import run_debate
+from agents.gemini_client import chat
+from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
 
 # ===== SAYFA AYARLARI =====
 st.set_page_config(
@@ -28,34 +29,35 @@ st.markdown("""
         max-width: 800px;
         margin: 0 auto;
     }
-    .professor-msg {
-        background-color: #e8f0fe;
-        border-left: 4px solid #1a73e8;
-        padding: 12px 16px;
-        border-radius: 0 8px 8px 0;
-        margin: 8px 0;
-    }
-    .student-msg {
-        background-color: #e6f4ea;
-        border-left: 4px solid #0a8754;
-        padding: 12px 16px;
-        border-radius: 0 8px 8px 0;
-        margin: 8px 0;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 # ===== BAŞLIK =====
 st.title("🎓 Münazara")
-st.caption("Kavramı yaz, Profesör ve Öğrenci tartışsın, sen izle ve araya gir!")
+st.caption("Kavramı yaz, Profesör açıklar, sen araya gir veya Öğrenci'ye bırak!")
 
 # ===== STATE =====
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "debate_running" not in st.session_state:
-    st.session_state.debate_running = False
-if "debate_done" not in st.session_state:
-    st.session_state.debate_done = False
+if "debate_started" not in st.session_state:
+    st.session_state.debate_started = False
+if "waiting_for_user" not in st.session_state:
+    st.session_state.waiting_for_user = False
+if "current_round" not in st.session_state:
+    st.session_state.current_round = 0
+if "prof_history" not in st.session_state:
+    st.session_state.prof_history = []
+if "student_history" not in st.session_state:
+    st.session_state.student_history = []
+if "topic" not in st.session_state:
+    st.session_state.topic = ""
+if "user_asking" not in st.session_state:
+    st.session_state.user_asking = False
+
+# Profesör ve Öğrenci sıcaklıkları
+PROF_TEMP = 0.3
+STUDENT_TEMP = 0.7
+MAX_ROUNDS = 5
 
 # ===== MEVCUT MESAJLARI GÖSTER =====
 for msg in st.session_state.messages:
@@ -64,82 +66,207 @@ for msg in st.session_state.messages:
             st.markdown(f"**Profesör Aydın**\n\n{msg['content']}")
     elif msg["role"] == "student":
         with st.chat_message("assistant", avatar="🙋"):
-            st.markdown(f"**Öğrenci**\n\n{msg['content']}")
+            st.markdown(f"**Öğrenci (AI)**\n\n{msg['content']}")
     elif msg["role"] == "user":
         with st.chat_message("user", avatar="🧑"):
             st.markdown(msg["content"])
+    elif msg["role"] == "system":
+        with st.chat_message("assistant", avatar="⚠️"):
+            st.warning(msg["content"])
+
+
+# ===== FONKSİYONLAR =====
+def add_message(role, content):
+    """Mesaj ekle ve ekranda göster"""
+    st.session_state.messages.append({"role": role, "content": content})
+    
+    if role == "professor":
+        with st.chat_message("assistant", avatar="🎓"):
+            st.markdown(f"**Profesör Aydın**\n\n{content}")
+    elif role == "student":
+        with st.chat_message("assistant", avatar="🙋"):
+            st.markdown(f"**Öğrenci (AI)**\n\n{content}")
+    elif role == "user":
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(content)
+    elif role == "system":
+        with st.chat_message("assistant", avatar="⚠️"):
+            st.warning(content)
+
+
+def professor_speaks(is_opening=False):
+    """Profesörün konuşması"""
+    if is_opening:
+        # İlk açılış
+        prompt = get_opening_prompt(st.session_state.topic)
+        st.session_state.prof_history.append({"role": "user", "content": prompt})
+    
+    response = chat(
+        system_prompt=PROFESSOR_PROMPT,
+        history=st.session_state.prof_history,
+        temperature=PROF_TEMP,
+    )
+    
+    if response is None:
+        add_message("system", "⚠️ API hatası - Profesör cevap veremedi.")
+        return False
+    
+    st.session_state.prof_history.append({"role": "model", "content": response})
+    add_message("professor", response)
+    return response
+
+
+def student_speaks(prof_last_message):
+    """AI Öğrencinin konuşması"""
+    st.session_state.student_history.append({"role": "user", "content": prof_last_message})
+    
+    response = chat(
+        system_prompt=STUDENT_PROMPT,
+        history=st.session_state.student_history,
+        temperature=STUDENT_TEMP,
+    )
+    
+    if response is None:
+        add_message("system", "⚠️ API hatası - Öğrenci cevap veremedi.")
+        return False
+    
+    st.session_state.student_history.append({"role": "model", "content": response})
+    add_message("student", response)
+    return response
+
 
 # ===== KAVRAM GİRİŞİ =====
-if not st.session_state.debate_done:
-    topic = st.chat_input(
-        "Bir kavram yazın (ör: Türev nedir, Fotosentez, Arz ve Talep...)"
-    )
-
-    if topic and not st.session_state.debate_running:
-        st.session_state.debate_running = True
-
-        # Kullanıcının girdiği kavramı göster
-        st.session_state.messages.append({
-            "role": "user",
-            "content": f"📚 **Konu:** {topic}"
-        })
-        with st.chat_message("user", avatar="🧑"):
-            st.markdown(f"📚 **Konu:** {topic}")
-
-        # Tartışmayı başlat
-        with st.spinner("Tartışma başlıyor..."):
-            results = run_debate(topic, num_rounds=3)
-
-        # Sonuçları ekrana bas
-        for msg in results:
-            st.session_state.messages.append({
-                "role": msg["role"],
-                "content": msg["content"],
-            })
-
-            if msg["role"] == "professor":
-                with st.chat_message("assistant", avatar="🎓"):
-                    st.markdown(f"**Profesör Aydın**\n\n{msg['content']}")
-            elif msg["role"] == "student":
-                with st.chat_message("assistant", avatar="🙋"):
-                    st.markdown(f"**Öğrenci**\n\n{msg['content']}")
-
-        st.session_state.debate_running = False
-        st.session_state.debate_done = True
+if not st.session_state.debate_started:
+    topic = st.chat_input("Bir kavram yazın (ör: Türev nedir, Fotosentez, Arz ve Talep...)")
+    
+    if topic:
+        st.session_state.topic = topic
+        st.session_state.debate_started = True
+        
+        # Kullanıcının girdiği konuyu göster
+        add_message("user", f"📚 **Konu:** {topic}")
+        
+        # Profesör açılış konuşması yapsın
+        with st.spinner("Profesör açıklıyor..."):
+            prof_response = professor_speaks(is_opening=True)
+        
+        if prof_response:
+            st.session_state.waiting_for_user = True
+            st.session_state.current_round = 1
+        
         st.rerun()
 
-# ===== TARTIŞMA BİTTİYSE: YENİ KONU VEYA SORU =====
-if st.session_state.debate_done:
+# ===== KULLANICI SIRASI =====
+elif st.session_state.waiting_for_user and not st.session_state.user_asking:
     st.divider()
+    st.markdown("### 💬 Sıra sende!")
+    
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🔄 Yeni konu", use_container_width=True):
-            st.session_state.messages = []
-            st.session_state.debate_done = False
-            st.session_state.debate_running = False
+        if st.button("⏭️ Turumu atla (Öğrenci sorsun)", use_container_width=True):
+            # AI Öğrenci konuşsun
+            with st.spinner("Öğrenci soruyor..."):
+                # Profesörün son mesajını al
+                prof_last = st.session_state.prof_history[-1]["content"]
+                student_response = student_speaks(prof_last)
+            
+            if student_response:
+                # Profesör öğrenciye cevap versin
+                with st.spinner("Profesör cevaplıyor..."):
+                    st.session_state.prof_history.append({"role": "user", "content": student_response})
+                    prof_response = professor_speaks()
+                
+                if prof_response:
+                    st.session_state.current_round += 1
+                    
+                    # Max tura ulaştıysa bitir
+                    if st.session_state.current_round >= MAX_ROUNDS:
+                        st.session_state.waiting_for_user = False
+                        add_message("system", "✅ Tartışma tamamlandı!")
+            
             st.rerun()
+    
     with col2:
-        st.button("❓ Soru sor (yakında)", disabled=True, use_container_width=True)
+        if st.button("❓ Ben soru soracağım", use_container_width=True):
+            st.session_state.user_asking = True
+            st.rerun()
+
+# ===== KULLANICI SORU SORUYOR =====
+elif st.session_state.user_asking:
+    st.divider()
+    st.markdown("### 💬 Sorunuzu yazın:")
+    
+    user_question = st.chat_input("Profesöre sormak istediğiniz soruyu yazın...")
+    
+    if user_question:
+        # Kullanıcı sorusunu göster
+        add_message("user", f"❓ **Soru:** {user_question}")
+        
+        # Profesör cevaplasın
+        with st.spinner("Profesör cevaplıyor..."):
+            st.session_state.prof_history.append({
+                "role": "user", 
+                "content": f"Bir öğrenci şunu sordu: '{user_question}'. Bu soruyu cevapla."
+            })
+            prof_response = professor_speaks()
+        
+        if prof_response:
+            st.session_state.current_round += 1
+            st.session_state.user_asking = False
+            
+            # Max tura ulaştıysa bitir
+            if st.session_state.current_round >= MAX_ROUNDS:
+                st.session_state.waiting_for_user = False
+                add_message("system", "✅ Tartışma tamamlandı!")
+            else:
+                st.session_state.waiting_for_user = True
+        
+        st.rerun()
+
+# ===== TARTIŞMA BİTTİYSE =====
+elif st.session_state.debate_started and not st.session_state.waiting_for_user:
+    st.divider()
+    
+    if st.button("🔄 Yeni konu başlat", use_container_width=True):
+        # Tüm state'i sıfırla
+        st.session_state.messages = []
+        st.session_state.debate_started = False
+        st.session_state.waiting_for_user = False
+        st.session_state.current_round = 0
+        st.session_state.prof_history = []
+        st.session_state.student_history = []
+        st.session_state.topic = ""
+        st.session_state.user_asking = False
+        st.rerun()
 
 # ===== SIDEBAR =====
 with st.sidebar:
     st.header("Münazara Hakkında")
     st.markdown("""
-    **Münazara**, bir kavramı iki farklı bakış açısıyla
-    öğrenmenizi sağlayan bir AI tartışma platformudur.
+    **Münazara**, interaktif bir AI öğrenme platformudur.
 
     🎓 **Profesör Aydın** — Kavramı açıklar, derinleştirir
 
-    🙋 **Öğrenci** — Soru sorar, yanlış anlar, itiraz eder
+    🙋 **Öğrenci (AI)** — Soru sorar, yanlış anlar
+
+    🧑 **Sen** — Araya girip soru sorabilirsin!
 
     ---
 
-    **Nasıl kullanılır?**
+    **Nasıl çalışır?**
     1. Bir kavram yazın
-    2. Tartışmayı izleyin
-    3. (Yakında) Araya girip soru sorun
+    2. Profesör açıklar
+    3. Her turda karar ver:
+       - "Turumu atla" → AI öğrenci sorar
+       - "Ben soru soracağım" → Sen sorarsın
+    4. Profesör cevaplar, döngü devam eder
 
     ---
 
     *Hackathon 2026 · BTK Akademi × Google × GİRVAK*
     """)
+    
+    # Debug bilgisi
+    if st.session_state.debate_started:
+        st.divider()
+        st.caption(f"**Tur:** {st.session_state.current_round}/{MAX_ROUNDS}")
