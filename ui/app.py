@@ -223,13 +223,7 @@ elif st.session_state.user_asking:
             prof_response = professor_speaks()
         
         if prof_response:
-            # Profesör'ün cevabını Kamil'in hafızasına da ekle
-            summary = prof_response[:150] + "..." if len(prof_response) > 150 else prof_response
-            st.session_state.student_history.append({
-                "role": "user", 
-                "content": f"[Profesör bir öğrencinin '{user_question}' sorusunu yanıtladı: {summary}]"
-            })
-            
+            # Kamil'in history'sine ekleme - role sequence hatası önlenir
             st.session_state.current_round += 1
             st.session_state.user_asking = False
             
