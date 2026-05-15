@@ -1,6 +1,6 @@
 # 🎓 Münazara — Çoklu Ajan Öğrenme Sahnesi
 
-Bir kavram girin, **Profesör Aydın** ve **Öğrenci** tartışsın — siz izleyin, araya girin, öğrenin.
+Bir kavram girin, **Profesör Gültekin** ve **Kamil** tartışsın — siz izleyin, araya girin, öğrenin.
 
 > Hackathon 2026 · BTK Akademi × Google × GİRVAK
 
@@ -10,7 +10,7 @@ Bir kavram girin, **Profesör Aydın** ve **Öğrenci** tartışsın — siz izl
 
 ### 1. Repo'yu klonlayın
 ```bash
-git clone https://github.com/KULLANICI/munazara.git
+git clone https://github.com/ravzaatasdemir/munazara.git
 cd munazara
 ```
 
@@ -56,8 +56,8 @@ Profesör     Öğrenci
 Streamlit UI (sohbet ekranı)
 ```
 
-- **Profesör Aydın 🎓** — Kavramı açıklar, derinleştirir, düzeltir
-- **Öğrenci 🙋** — Soru sorar, yanlış anlar, itiraz eder, basit benzetme arar
+- **Profesör Gültekin 🎓** — Antik Yunan ve Osmanlı medrese geleneğinden beslenen nihrir bir akademisyen. Sokratik yöntemle muhatabını kendi çelişkisine düşürür, yanlışı doğrudan düzeltir, kavramı köküne kadar söker. Zaman zaman Latince, Osmanlıca veya Arap felsefesinden terimler serpiştirerek derinlik katar.
+- **Kamil 🙋** — Cahil cesaretine sahip, atılgan ve eleştirel bir öğrenci. Başta eksik bilgiyle gelir, sorgulamaktan çekinmez. Ama nihayetinde öğrenmeye açıktır — Profesör ikna ettikçe gerçekten anlar, her turda soruları olgunlaşır ve karakter gelişimi yaşar.
 
 ---
 

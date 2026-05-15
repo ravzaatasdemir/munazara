@@ -34,7 +34,7 @@ st.markdown("""
 
 # ===== BAŞLIK =====
 st.title("🎓 Münazara")
-st.caption("Kavramı yaz, Profesör açıklar, sen araya gir veya Öğrenci'ye bırak!")
+st.caption("Kavramı yaz, Profesör açıklar, sen araya gir veya Kamil'e bırak!")
 
 # ===== STATE =====
 if "messages" not in st.session_state:
@@ -63,10 +63,10 @@ MAX_ROUNDS = 5
 for msg in st.session_state.messages:
     if msg["role"] == "professor":
         with st.chat_message("assistant", avatar="🎓"):
-            st.markdown(f"**Profesör Aydın**\n\n{msg['content']}")
+            st.markdown(f"**Profesör Gültekin**\n\n{msg['content']}")
     elif msg["role"] == "student":
         with st.chat_message("assistant", avatar="🙋"):
-            st.markdown(f"**Öğrenci (AI)**\n\n{msg['content']}")
+            st.markdown(f"**Kamil**\n\n{msg['content']}")
     elif msg["role"] == "user":
         with st.chat_message("user", avatar="🧑"):
             st.markdown(msg["content"])
@@ -82,10 +82,10 @@ def add_message(role, content):
     
     if role == "professor":
         with st.chat_message("assistant", avatar="🎓"):
-            st.markdown(f"**Profesör Aydın**\n\n{content}")
+            st.markdown(f"**Profesör Gültekin**\n\n{content}")
     elif role == "student":
         with st.chat_message("assistant", avatar="🙋"):
-            st.markdown(f"**Öğrenci (AI)**\n\n{content}")
+            st.markdown(f"**Kamil**\n\n{content}")
     elif role == "user":
         with st.chat_message("user", avatar="🧑"):
             st.markdown(content)
@@ -127,7 +127,7 @@ def student_speaks(prof_last_message):
     )
     
     if response is None:
-        add_message("system", "⚠️ API hatası - Öğrenci cevap veremedi.")
+        add_message("system", "⚠️ API hatası - Kamil cevap veremedi.")
         return False
     
     st.session_state.student_history.append({"role": "model", "content": response})
@@ -153,6 +153,9 @@ if not st.session_state.debate_started:
         if prof_response:
             st.session_state.waiting_for_user = True
             st.session_state.current_round = 1
+        else:
+            # İlk açılışta hata - tartışma başlamadı
+            st.session_state.debate_started = False
         
         st.rerun()
 
@@ -163,9 +166,9 @@ elif st.session_state.waiting_for_user and not st.session_state.user_asking:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("⏭️ Turumu atla (Öğrenci sorsun)", use_container_width=True):
+        if st.button("⏭️ Turumu atla (Kamil sorsun)", use_container_width=True):
             # AI Öğrenci konuşsun
-            with st.spinner("Öğrenci soruyor..."):
+            with st.spinner("Kamil soruyor..."):
                 # Profesörün son mesajını al
                 prof_last = st.session_state.prof_history[-1]["content"]
                 student_response = student_speaks(prof_last)
@@ -183,6 +186,14 @@ elif st.session_state.waiting_for_user and not st.session_state.user_asking:
                     if st.session_state.current_round >= MAX_ROUNDS:
                         st.session_state.waiting_for_user = False
                         add_message("system", "✅ Tartışma tamamlandı!")
+                else:
+                    # Profesör cevap veremedi - tartışmayı bitir
+                    st.session_state.waiting_for_user = False
+                    add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
+            else:
+                # Kamil cevap veremedi - tartışmayı bitir
+                st.session_state.waiting_for_user = False
+                add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
             
             st.rerun()
     
@@ -204,13 +215,21 @@ elif st.session_state.user_asking:
         
         # Profesör cevaplasın
         with st.spinner("Profesör cevaplıyor..."):
+            # Kullanıcı sorusunu context ile Profesör'e ilet
             st.session_state.prof_history.append({
                 "role": "user", 
-                "content": f"Bir öğrenci şunu sordu: '{user_question}'. Bu soruyu cevapla."
+                "content": f"[Tartışma sırasında sınıftaki başka bir öğrenci (insan kullanıcı) araya girip şunu sordu: '{user_question}']\n\nÖnceki tartışmayı ve bu konuda söylediklerini dikkate alarak bu soruyu yanıtla. Daha önce açıkladığın kavramlara referans verebilirsin."
             })
             prof_response = professor_speaks()
         
         if prof_response:
+            # Profesör'ün cevabını Kamil'in hafızasına da ekle
+            summary = prof_response[:150] + "..." if len(prof_response) > 150 else prof_response
+            st.session_state.student_history.append({
+                "role": "user", 
+                "content": f"[Profesör bir öğrencinin '{user_question}' sorusunu yanıtladı: {summary}]"
+            })
+            
             st.session_state.current_round += 1
             st.session_state.user_asking = False
             
@@ -220,6 +239,11 @@ elif st.session_state.user_asking:
                 add_message("system", "✅ Tartışma tamamlandı!")
             else:
                 st.session_state.waiting_for_user = True
+        else:
+            # API hatası - state'i temizle, tartışmayı bitir
+            st.session_state.user_asking = False
+            st.session_state.waiting_for_user = False
+            add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı. Yeni konu başlatabilirsiniz.")
         
         st.rerun()
 
@@ -245,9 +269,9 @@ with st.sidebar:
     st.markdown("""
     **Münazara**, interaktif bir AI öğrenme platformudur.
 
-    🎓 **Profesör Aydın** — Kavramı açıklar, derinleştirir
+    🎓 **Profesör Gültekin** — Nihrir akademisyen, felsefi derinlik
 
-    🙋 **Öğrenci (AI)** — Soru sorar, yanlış anlar
+    🙋 **Kamil** — Eleştirel öğrenci, sorgulamacı
 
     🧑 **Sen** — Araya girip soru sorabilirsin!
 
@@ -257,7 +281,7 @@ with st.sidebar:
     1. Bir kavram yazın
     2. Profesör açıklar
     3. Her turda karar ver:
-       - "Turumu atla" → AI öğrenci sorar
+       - "Turumu atla" → Kamil sorar
        - "Ben soru soracağım" → Sen sorarsın
     4. Profesör cevaplar, döngü devam eder
 

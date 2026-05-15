@@ -17,14 +17,14 @@ load_dotenv()
 _client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 # Kullanılacak model — ücretsiz katman için Flash
-MODEL = "gemini-pro-latest"
+MODEL = "gemini-2.5-flash"
 
 
 def chat(
     system_prompt: str,
     history: list[dict],
     temperature: float = 0.7,
-    max_tokens: int = 500,
+    max_tokens: int = 1500,
 ):
     """
     Gemini'a mesaj gönder, cevap al.
