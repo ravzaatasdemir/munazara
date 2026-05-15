@@ -1,4 +1,4 @@
-"""
+,"""
 Münazara — Orchestrator
 
 İki ajanın tartışma akışını yönetir.
@@ -60,7 +60,7 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
     
     prof_gemini_history.append({"role": "model", "content": prof_response})
 
-    msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
+    msg = {"role": "professor", "name": "Profesör Gültekin 🎓", "content": prof_response}
     debate_history.append(msg)
     if on_message:
         on_message(**msg)
@@ -86,7 +86,7 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
         
         student_gemini_history.append({"role": "model", "content": student_response})
 
-        msg = {"role": "student", "name": "Öğrenci 🙋", "content": student_response}
+        msg = {"role": "student", "name": "Kamil 🙋", "content": student_response}
         debate_history.append(msg)
         if on_message:
             on_message(**msg)
@@ -112,7 +112,7 @@ def run_debate(topic: str, num_rounds: int = 4, on_message=None):
             
             prof_gemini_history.append({"role": "model", "content": prof_response})
 
-            msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
+            msg = {"role": "professor", "name": "Profesör Gültekin 🎓", "content": prof_response}
             debate_history.append(msg)
             if on_message:
                 on_message(**msg)
@@ -148,7 +148,7 @@ def inject_user_question(
     
     prof_gemini_history.append({"role": "model", "content": prof_response})
 
-    msg = {"role": "professor", "name": "Profesör Aydın 🎓", "content": prof_response}
+    msg = {"role": "professor", "name": "Profesör Gültekin 🎓", "content": prof_response}
     debate_history.append(msg)
     if on_message:
         on_message(**msg)
