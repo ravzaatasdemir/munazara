@@ -116,9 +116,20 @@ def professor_speaks(is_opening=False):
     return response
 
 
-def student_speaks(prof_last_message):
+def student_speaks(prof_last_message, current_round, max_rounds):
     """AI Öğrencinin konuşması"""
-    st.session_state.student_history.append({"role": "user", "content": prof_last_message})
+    # Soru seviyesi belirle
+    if current_round < 2:
+        level = "yüzeysel — merak ettiğin temel şeyleri sor"
+    elif current_round < 4:
+        level = "orta — kavramları birbirine bağlamaya başla"
+    else:
+        level = "derin — eleştirel düşün, farklı senaryolar sor"
+    
+    # Context ekle
+    context = f"[Tur {current_round}/{max_rounds}. Soru seviyen: {level}]\n\n{prof_last_message}"
+    
+    st.session_state.student_history.append({"role": "user", "content": context})
     
     response = chat(
         system_prompt=STUDENT_PROMPT,
@@ -171,7 +182,11 @@ elif st.session_state.waiting_for_user and not st.session_state.user_asking:
             with st.spinner("Kamil soruyor..."):
                 # Profesörün son mesajını al
                 prof_last = st.session_state.prof_history[-1]["content"]
-                student_response = student_speaks(prof_last)
+                student_response = student_speaks(
+                    prof_last,
+                    st.session_state.current_round,
+                    MAX_ROUNDS
+                )
             
             if student_response:
                 # Profesör öğrenciye cevap versin
