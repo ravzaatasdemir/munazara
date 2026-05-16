@@ -116,8 +116,9 @@ if st.session_state.orchestrator is None:
             success = st.session_state.orchestrator.start_debate(on_chunk, on_complete)
         
         if not success:
-            add_message("system", "⚠️ API hatası - Tartışma başlatılamadı.")
-            st.session_state.orchestrator = None
+            if not success:
+                error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                add_message("system", f"❌ {error_msg}")
         
         st.rerun()
 
@@ -172,7 +173,8 @@ elif st.session_state.orchestrator.waiting_for_user and not st.session_state.use
                 success = st.session_state.orchestrator.user_skip_turn(on_chunk, on_complete)
             
             if not success:
-                add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
+                error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                add_message("system", f"❌ {error_msg}")
             
             if st.session_state.orchestrator.is_finished:
                 add_message("system", "✅ Tartışma tamamlandı!")
@@ -228,7 +230,9 @@ elif st.session_state.user_asking:
             )
         
         if not success:
-            add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
+            if not success:
+                error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                add_message("system", f"❌ {error_msg}")
         
         st.session_state.user_asking = False
         

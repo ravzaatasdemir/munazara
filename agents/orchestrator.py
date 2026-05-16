@@ -4,6 +4,7 @@ Münazara — Orchestrator
 
 from agents.gemini_client import chat_stream
 from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
+from agents.exceptions import MunazaraError, APIQuotaError, APIConnectionError
 import time
 
 PROF_TEMP = 0.3
@@ -21,59 +22,74 @@ class DebateOrchestrator:
         self.is_started = False
         self.is_finished = False
         self.waiting_for_user = False
+        self.last_error = None
     
     def start_debate(self, on_chunk=None, on_complete=None):
         opening = get_opening_prompt(self.topic)
         self.prof_history.append({"role": "user", "content": opening})
-        success = self._professor_speaks(on_chunk, on_complete)
-        if success:
-            self.is_started = True
-            self.waiting_for_user = True
-            self.current_round = 1
-        return success
+        try:
+            success = self._professor_speaks(on_chunk, on_complete)
+            if success:
+                self.is_started = True
+                self.waiting_for_user = True
+                self.current_round = 1
+            return success
+        except MunazaraError as e:
+            self.last_error = str(e)
+            return False
     
     def user_skip_turn(self, on_chunk=None, on_complete=None):
         if not self.waiting_for_user:
             return False
-        prof_last = self.prof_history[-1]["content"]
-        student_success = self._student_speaks(prof_last, on_chunk, on_complete)
-        if not student_success:
+        try:
+            prof_last = self.prof_history[-1]["content"]
+            student_success = self._student_speaks(prof_last, on_chunk, on_complete)
+            if not student_success:
+                self.is_finished = True
+                return False
+            student_last = self.student_history[-1]["content"]
+            self.prof_history.append({"role": "user", "content": student_last})
+            prof_success = self._professor_speaks(on_chunk, on_complete)
+            if not prof_success:
+                self.is_finished = True
+                return False
+            self.current_round += 1
+            if self.current_round >= self.max_rounds:
+                self.is_finished = True
+                self.waiting_for_user = False
+            return True
+        except MunazaraError as e:
+            self.last_error = str(e)
             self.is_finished = True
             return False
-        student_last = self.student_history[-1]["content"]
-        self.prof_history.append({"role": "user", "content": student_last})
-        prof_success = self._professor_speaks(on_chunk, on_complete)
-        if not prof_success:
-            self.is_finished = True
-            return False
-        self.current_round += 1
-        if self.current_round >= self.max_rounds:
-            self.is_finished = True
-            self.waiting_for_user = False
-        return True
     
     def user_ask_question(self, question: str, on_chunk=None, on_complete=None):
         if not self.waiting_for_user:
             return False
         
-        # Prompt injection koruması
         question = self._sanitize_input(question)
         
         context = f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\nBu soruyu yanıtla."
         self.prof_history.append({"role": "user", "content": context})
-        success = self._professor_speaks(on_chunk, on_complete)
-        if success:
-            prof_response = self.prof_history[-1]["content"]
-            summary = f"[Kullanıcı '{question}' sordu, Profesör cevapladı: '{prof_response[:120]}...']"
-            self.student_history.append({"role": "model", "content": summary})
-            self.current_round += 1
-            if self.current_round >= self.max_rounds:
+        try:
+            success = self._professor_speaks(on_chunk, on_complete)
+            if success:
+                prof_response = self.prof_history[-1]["content"]
+                summary = f"[Kullanıcı '{question}' sordu, Profesör cevapladı: '{prof_response[:120]}...']"
+                self.student_history.append({"role": "model", "content": summary})
+                self.current_round += 1
+                if self.current_round >= self.max_rounds:
+                    self.is_finished = True
+                    self.waiting_for_user = False
+            else:
                 self.is_finished = True
                 self.waiting_for_user = False
-        else:
+            return success
+        except MunazaraError as e:
+            self.last_error = str(e)
             self.is_finished = True
             self.waiting_for_user = False
-        return success
+            return False
     
     def _professor_speaks(self, on_chunk=None, on_complete=None):
         full_response = ""
@@ -126,28 +142,15 @@ class DebateOrchestrator:
     def _sanitize_input(self, text: str) -> str:
         """Prompt injection koruması"""
         dangerous_patterns = [
-            "talimatları unut",
-            "ignore instructions",
-            "ignore previous",
-            "sistem promptunu",
-            "system prompt",
-            "karakterinden çık",
-            "role play",
-            "sen artık",
-            "you are now",
-            "DAN mode",
-            "jailbreak",
-            "forget everything",
-            "her şeyi unut",
-            "önceki kuralları",
+            "talimatları unut", "ignore instructions", "ignore previous",
+            "sistem promptunu", "system prompt", "karakterinden çık",
+            "role play", "sen artık", "you are now", "DAN mode",
+            "jailbreak", "forget everything", "her şeyi unut", "önceki kuralları",
         ]
-        
         text_lower = text.lower()
         for pattern in dangerous_patterns:
             if pattern.lower() in text_lower:
                 return "[Bu soru güvenlik filtresine takıldı. Lütfen konuyla ilgili bir soru sorun.]"
-        
         if len(text) > 500:
             text = text[:500]
-        
         return text
