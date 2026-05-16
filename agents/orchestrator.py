@@ -55,6 +55,10 @@ class DebateOrchestrator:
     def user_ask_question(self, question: str, on_chunk=None, on_complete=None):
         if not self.waiting_for_user:
             return False
+        
+        # Prompt injection koruması
+        question = self._sanitize_input(question)
+        
         context = f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\nBu soruyu yanıtla."
         self.prof_history.append({"role": "user", "content": context})
         success = self._professor_speaks(on_chunk, on_complete)
@@ -118,3 +122,32 @@ class DebateOrchestrator:
         if on_complete:
             on_complete("student", full_response)
         return full_response
+    
+    def _sanitize_input(self, text: str) -> str:
+        """Prompt injection koruması"""
+        dangerous_patterns = [
+            "talimatları unut",
+            "ignore instructions",
+            "ignore previous",
+            "sistem promptunu",
+            "system prompt",
+            "karakterinden çık",
+            "role play",
+            "sen artık",
+            "you are now",
+            "DAN mode",
+            "jailbreak",
+            "forget everything",
+            "her şeyi unut",
+            "önceki kuralları",
+        ]
+        
+        text_lower = text.lower()
+        for pattern in dangerous_patterns:
+            if pattern.lower() in text_lower:
+                return "[Bu soru güvenlik filtresine takıldı. Lütfen konuyla ilgili bir soru sorun.]"
+        
+        if len(text) > 500:
+            text = text[:500]
+        
+        return text
