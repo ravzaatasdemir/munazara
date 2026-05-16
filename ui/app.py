@@ -2,6 +2,7 @@
 Münazara — Streamlit Arayüzü (İnteraktif Mod)
 
 Çalıştırmak için: streamlit run ui/app.py
+Orchestrator kullanarak basitleştirilmiş versiyon.
 Kişi B bu dosyayı yönetir.
 """
 
@@ -12,8 +13,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import streamlit as st
-from agents.gemini_client import chat
-from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
+from agents.orchestrator import DebateOrchestrator
 
 # ===== SAYFA AYARLARI =====
 st.set_page_config(
@@ -37,27 +37,12 @@ st.title("🎓 Münazara")
 st.caption("Kavramı yaz, Profesör açıklar, sen araya gir veya Kamil'e bırak!")
 
 # ===== STATE =====
+if "orchestrator" not in st.session_state:
+    st.session_state.orchestrator = None
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "debate_started" not in st.session_state:
-    st.session_state.debate_started = False
-if "waiting_for_user" not in st.session_state:
-    st.session_state.waiting_for_user = False
-if "current_round" not in st.session_state:
-    st.session_state.current_round = 0
-if "prof_history" not in st.session_state:
-    st.session_state.prof_history = []
-if "student_history" not in st.session_state:
-    st.session_state.student_history = []
-if "topic" not in st.session_state:
-    st.session_state.topic = ""
 if "user_asking" not in st.session_state:
     st.session_state.user_asking = False
-
-# Profesör ve Öğrenci sıcaklıkları
-PROF_TEMP = 0.3
-STUDENT_TEMP = 0.7
-MAX_ROUNDS = 5
 
 # ===== MEVCUT MESAJLARI GÖSTER =====
 for msg in st.session_state.messages:
@@ -79,184 +64,118 @@ for msg in st.session_state.messages:
 def add_message(role, content):
     """Mesaj ekle ve ekranda göster"""
     st.session_state.messages.append({"role": role, "content": content})
-    
+
+
+def show_streaming_message(role, content):
+    """Streaming mesajı göster"""
     if role == "professor":
         with st.chat_message("assistant", avatar="🎓"):
             st.markdown(f"**Profesör Gültekin**\n\n{content}")
     elif role == "student":
         with st.chat_message("assistant", avatar="🙋"):
             st.markdown(f"**Kamil**\n\n{content}")
-    elif role == "user":
-        with st.chat_message("user", avatar="🧑"):
-            st.markdown(content)
-    elif role == "system":
-        with st.chat_message("assistant", avatar="⚠️"):
-            st.warning(content)
 
-
-def professor_speaks(is_opening=False):
-    """Profesörün konuşması - STREAMING (kelime kelime)"""
-    if is_opening:
-        # İlk açılış
-        prompt = get_opening_prompt(st.session_state.topic)
-        st.session_state.prof_history.append({"role": "user", "content": prompt})
-    
-    # Streaming için boş placeholder
-    message_placeholder = st.empty()
-    full_response = ""
-    
-    # Streaming başlat
-    from agents.gemini_client import chat_stream
-    import time
-    
-    with message_placeholder.container():
-        with st.chat_message("assistant", avatar="🎓"):
-            st.markdown("**Profesör Gültekin**\n\n")
-            text_placeholder = st.empty()
-            
-            for chunk in chat_stream(
-                system_prompt=PROFESSOR_PROMPT,
-                history=st.session_state.prof_history,
-                temperature=PROF_TEMP,
-            ):
-                if chunk is None:
-                    add_message("system", "⚠️ API hatası - Profesör cevap veremedi.")
-                    return False
-                
-                # Chunk'ı kelime kelime göster
-                words = chunk.split(' ')
-                for word in words:
-                    full_response += word + ' '
-                    text_placeholder.markdown(full_response + "▌")
-                    time.sleep(0.05)  # Her kelime arası 50ms gecikme
-            
-            text_placeholder.markdown(full_response.strip())
-    
-    if not full_response:
-        add_message("system", "⚠️ API hatası - Profesör cevap veremedi.")
-        return False
-    
-    st.session_state.prof_history.append({"role": "model", "content": full_response.strip()})
-    st.session_state.messages.append({"role": "professor", "content": full_response.strip()})
-    return full_response.strip()
-
-def student_speaks(prof_last_message, current_round, max_rounds):
-    """AI Öğrencinin konuşması - STREAMING (kelime kelime)"""
-    # Soru seviyesi belirle
-    if current_round < 2:
-        level = "yüzeysel — merak ettiğin temel şeyleri sor"
-    elif current_round < 4:
-        level = "orta — kavramları birbirine bağlamaya başla"
-    else:
-        level = "derin — eleştirel düşün, farklı senaryolar sor"
-    
-    # Context ekle
-    context = f"[Tur {current_round}/{max_rounds}. Soru seviyen: {level}]\n\n{prof_last_message}"
-    
-    st.session_state.student_history.append({"role": "user", "content": context})
-    
-    # Streaming için boş placeholder
-    message_placeholder = st.empty()
-    full_response = ""
-    
-    # Streaming başlat
-    from agents.gemini_client import chat_stream
-    import time
-    
-    with message_placeholder.container():
-        with st.chat_message("assistant", avatar="🙋"):
-            st.markdown("**Kamil**\n\n")
-            text_placeholder = st.empty()
-            
-            for chunk in chat_stream(
-                system_prompt=STUDENT_PROMPT,
-                history=st.session_state.student_history,
-                temperature=STUDENT_TEMP,
-            ):
-                if chunk is None:
-                    add_message("system", "⚠️ API hatası - Kamil cevap veremedi.")
-                    return False
-                
-                # Chunk'ı kelime kelime göster
-                words = chunk.split(' ')
-                for word in words:
-                    full_response += word + ' '
-                    text_placeholder.markdown(full_response + "▌")
-                    time.sleep(0.05)  # Her kelime arası 50ms gecikme
-            
-            text_placeholder.markdown(full_response.strip())
-    
-    if not full_response:
-        add_message("system", "⚠️ API hatası - Kamil cevap veremedi.")
-        return False
-    
-    st.session_state.student_history.append({"role": "model", "content": full_response.strip()})
-    st.session_state.messages.append({"role": "student", "content": full_response.strip()})
-    return full_response.strip()
 
 # ===== KAVRAM GİRİŞİ =====
-if not st.session_state.debate_started:
+if st.session_state.orchestrator is None:
     topic = st.chat_input("Bir kavram yazın (ör: Türev nedir, Fotosentez, Arz ve Talep...)")
     
     if topic:
-        st.session_state.topic = topic
-        st.session_state.debate_started = True
-        
         # Kullanıcının girdiği konuyu göster
         add_message("user", f"📚 **Konu:** {topic}")
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(f"📚 **Konu:** {topic}")
+        
+        # Orchestrator oluştur
+        st.session_state.orchestrator = DebateOrchestrator(topic, max_rounds=5)
+        
+        # Streaming için placeholder ve state
+        message_placeholder = st.empty()
+        
+        # Closure için container class kullan
+        class StreamState:
+            def __init__(self):
+                self.full_response = ""
+        
+        stream_state = StreamState()
+        
+        def on_chunk(role, chunk):
+            stream_state.full_response += chunk
+            
+            with message_placeholder.container():
+                with st.chat_message("assistant", avatar="🎓"):
+                    st.markdown(f"**Profesör Gültekin**\n\n{stream_state.full_response}▌")
+        
+        def on_complete(role, message):
+            message_placeholder.empty()
+            add_message("professor", stream_state.full_response)
+            show_streaming_message("professor", stream_state.full_response)
         
         # Profesör açılış konuşması yapsın
         with st.spinner("Profesör açıklıyor..."):
-            prof_response = professor_speaks(is_opening=True)
+            success = st.session_state.orchestrator.start_debate(on_chunk, on_complete)
         
-        if prof_response:
-            st.session_state.waiting_for_user = True
-            st.session_state.current_round = 1
-        else:
-            # İlk açılışta hata - tartışma başlamadı
-            st.session_state.debate_started = False
+        if not success:
+            add_message("system", "⚠️ API hatası - Tartışma başlatılamadı.")
+            st.session_state.orchestrator = None
         
         st.rerun()
 
 # ===== KULLANICI SIRASI =====
-elif st.session_state.waiting_for_user and not st.session_state.user_asking:
+elif st.session_state.orchestrator.waiting_for_user and not st.session_state.user_asking:
     st.divider()
     st.markdown("### 💬 Sıra sende!")
     
     col1, col2 = st.columns(2)
     with col1:
         if st.button("⏭️ Turumu atla (Kamil sorsun)", use_container_width=True):
-            # AI Öğrenci konuşsun
-            with st.spinner("Kamil soruyor..."):
-                # Profesörün son mesajını al
-                prof_last = st.session_state.prof_history[-1]["content"]
-                student_response = student_speaks(
-                    prof_last,
-                    st.session_state.current_round,
-                    MAX_ROUNDS
-                )
+            # Streaming placeholders
+            student_placeholder = st.empty()
+            prof_placeholder = st.empty()
             
-            if student_response:
-                # Profesör öğrenciye cevap versin
-                with st.spinner("Profesör cevaplıyor..."):
-                    st.session_state.prof_history.append({"role": "user", "content": student_response})
-                    prof_response = professor_speaks()
-                
-                if prof_response:
-                    st.session_state.current_round += 1
+            # State için container class
+            class StreamState:
+                def __init__(self):
+                    self.student_response = ""
+                    self.prof_response = ""
+                    self.current_speaker = None
+            
+            stream_state = StreamState()
+            
+            def on_chunk(role, chunk):
+                if role == "student":
+                    stream_state.current_speaker = "student"
+                    stream_state.student_response += chunk
+                    with student_placeholder.container():
+                        with st.chat_message("assistant", avatar="🙋"):
+                            st.markdown(f"**Kamil**\n\n{stream_state.student_response}▌")
+                elif role == "professor":
+                    if stream_state.current_speaker == "student":
+                        # Kamil bitti, placeholder'ı temizle
+                        student_placeholder.empty()
+                        add_message("student", stream_state.student_response)
+                        show_streaming_message("student", stream_state.student_response)
+                        stream_state.current_speaker = "professor"
                     
-                    # Max tura ulaştıysa bitir
-                    if st.session_state.current_round >= MAX_ROUNDS:
-                        st.session_state.waiting_for_user = False
-                        add_message("system", "✅ Tartışma tamamlandı!")
-                else:
-                    # Profesör cevap veremedi - tartışmayı bitir
-                    st.session_state.waiting_for_user = False
-                    add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
-            else:
-                # Kamil cevap veremedi - tartışmayı bitir
-                st.session_state.waiting_for_user = False
+                    stream_state.prof_response += chunk
+                    with prof_placeholder.container():
+                        with st.chat_message("assistant", avatar="🎓"):
+                            st.markdown(f"**Profesör Gültekin**\n\n{stream_state.prof_response}▌")
+            
+            def on_complete(role, message):
+                if role == "professor":
+                    prof_placeholder.empty()
+                    add_message("professor", stream_state.prof_response)
+                    show_streaming_message("professor", stream_state.prof_response)
+            
+            with st.spinner("Kamil soruyor..."):
+                success = st.session_state.orchestrator.user_skip_turn(on_chunk, on_complete)
+            
+            if not success:
                 add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
+            
+            if st.session_state.orchestrator.is_finished:
+                add_message("system", "✅ Tartışma tamamlandı!")
             
             st.rerun()
     
@@ -265,7 +184,6 @@ elif st.session_state.waiting_for_user and not st.session_state.user_asking:
             st.session_state.user_asking = True
             st.rerun()
 
-# ===== KULLANICI SORU SORUYOR =====
 # ===== KULLANICI SORU SORUYOR =====
 elif st.session_state.user_asking:
     st.divider()
@@ -276,56 +194,57 @@ elif st.session_state.user_asking:
     if user_question:
         # Kullanıcı sorusunu göster
         add_message("user", f"❓ **Soru:** {user_question}")
+        with st.chat_message("user", avatar="🧑"):
+            st.markdown(f"❓ **Soru:** {user_question}")
+        
+        # Streaming için placeholder
+        message_placeholder = st.empty()
+        
+        # State için container class
+        class StreamState:
+            def __init__(self):
+                self.full_response = ""
+        
+        stream_state = StreamState()
+        
+        def on_chunk(role, chunk):
+            stream_state.full_response += chunk
+            
+            with message_placeholder.container():
+                with st.chat_message("assistant", avatar="🎓"):
+                    st.markdown(f"**Profesör Gültekin**\n\n{stream_state.full_response}▌")
+        
+        def on_complete(role, message):
+            message_placeholder.empty()
+            add_message("professor", stream_state.full_response)
+            show_streaming_message("professor", stream_state.full_response)
         
         # Profesör cevaplasın
         with st.spinner("Profesör cevaplıyor..."):
-            # Kullanıcı sorusunu context ile Profesör'e ilet
-            st.session_state.prof_history.append({
-                "role": "user", 
-                "content": f"[Tartışma sırasında sınıftaki başka bir öğrenci (insan kullanıcı) araya girip şunu sordu: '{user_question}']\n\nÖnceki tartışmayı ve bu konuda söylediklerini dikkate alarak bu soruyu yanıtla. Daha önce açıkladığın kavramlara referans verebilirsin."
-            })
-            prof_response = professor_speaks()
+            success = st.session_state.orchestrator.user_ask_question(
+                user_question, 
+                on_chunk, 
+                on_complete
+            )
         
-        if prof_response:
-            # Kullanıcı müdahalesini Kamil'e bildir
-            # role: model olarak (Profesör söylüyor gibi) → role sequence korunur
-            user_intervention_summary = f"[Az önce başka bir öğrenci (kullanıcı) '{user_question}' diye sordu, Profesör ona da açıkladı: '{prof_response[:120]}...']"
-            
-            st.session_state.student_history.append({
-                "role": "model",
-                "content": user_intervention_summary
-            })
-            
-            st.session_state.current_round += 1
-            st.session_state.user_asking = False
-            
-            # Max tura ulaştıysa bitir
-            if st.session_state.current_round >= MAX_ROUNDS:
-                st.session_state.waiting_for_user = False
-                add_message("system", "✅ Tartışma tamamlandı!")
-            else:
-                st.session_state.waiting_for_user = True
-        else:
-            # API hatası - state'i temizle, tartışmayı bitir
-            st.session_state.user_asking = False
-            st.session_state.waiting_for_user = False
-            add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı. Yeni konu başlatabilirsiniz.")
+        if not success:
+            add_message("system", "❌ API hatası nedeniyle tartışma sonlandırıldı.")
+        
+        st.session_state.user_asking = False
+        
+        if st.session_state.orchestrator.is_finished:
+            add_message("system", "✅ Tartışma tamamlandı!")
         
         st.rerun()
 
 # ===== TARTIŞMA BİTTİYSE =====
-elif st.session_state.debate_started and not st.session_state.waiting_for_user:
+elif st.session_state.orchestrator and st.session_state.orchestrator.is_finished:
     st.divider()
     
     if st.button("🔄 Yeni konu başlat", use_container_width=True):
         # Tüm state'i sıfırla
         st.session_state.messages = []
-        st.session_state.debate_started = False
-        st.session_state.waiting_for_user = False
-        st.session_state.current_round = 0
-        st.session_state.prof_history = []
-        st.session_state.student_history = []
-        st.session_state.topic = ""
+        st.session_state.orchestrator = None
         st.session_state.user_asking = False
         st.rerun()
 
@@ -357,6 +276,6 @@ with st.sidebar:
     """)
     
     # Debug bilgisi
-    if st.session_state.debate_started:
+    if st.session_state.orchestrator:
         st.divider()
-        st.caption(f"**Tur:** {st.session_state.current_round}/{MAX_ROUNDS}")
+        st.caption(f"**Tur:** {st.session_state.orchestrator.current_round}/{st.session_state.orchestrator.max_rounds}")
