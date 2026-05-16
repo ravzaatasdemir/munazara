@@ -218,6 +218,7 @@ elif st.session_state.waiting_for_user and not st.session_state.user_asking:
             st.rerun()
 
 # ===== KULLANICI SORU SORUYOR =====
+# ===== KULLANICI SORU SORUYOR =====
 elif st.session_state.user_asking:
     st.divider()
     st.markdown("### 💬 Sorunuzu yazın:")
@@ -238,7 +239,15 @@ elif st.session_state.user_asking:
             prof_response = professor_speaks()
         
         if prof_response:
-            # Kamil'in history'sine ekleme - role sequence hatası önlenir
+            # Kullanıcı müdahalesini Kamil'e bildir
+            # role: model olarak (Profesör söylüyor gibi) → role sequence korunur
+            user_intervention_summary = f"[Az önce başka bir öğrenci (kullanıcı) '{user_question}' diye sordu, Profesör ona da açıkladı: '{prof_response[:120]}...']"
+            
+            st.session_state.student_history.append({
+                "role": "model",
+                "content": user_intervention_summary
+            })
+            
             st.session_state.current_round += 1
             st.session_state.user_asking = False
             
