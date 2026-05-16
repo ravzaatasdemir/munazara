@@ -2,29 +2,34 @@
 Münazara — Orchestrator
 """
 
+from __future__ import annotations
+from typing import Callable, Optional
 from agents.gemini_client import chat_stream
 from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
-from agents.exceptions import MunazaraError, APIQuotaError, APIConnectionError
+from agents.exceptions import MunazaraError
 import time
 
-PROF_TEMP = 0.3
-STUDENT_TEMP = 0.7
+PROF_TEMP: float = 0.3
+STUDENT_TEMP: float = 0.7
+
+ChunkCallback = Optional[Callable[[str, str], None]]
+CompleteCallback = Optional[Callable[[str, str], None]]
 
 
 class DebateOrchestrator:
-    def __init__(self, topic: str, max_rounds: int = 5):
-        self.topic = topic
-        self.max_rounds = max_rounds
-        self.current_round = 0
-        self.prof_history = []
-        self.student_history = []
-        self.messages = []
-        self.is_started = False
-        self.is_finished = False
-        self.waiting_for_user = False
-        self.last_error = None
+    def __init__(self, topic: str, max_rounds: int = 5) -> None:
+        self.topic: str = topic
+        self.max_rounds: int = max_rounds
+        self.current_round: int = 0
+        self.prof_history: list[dict[str, str]] = []
+        self.student_history: list[dict[str, str]] = []
+        self.messages: list[dict[str, str]] = []
+        self.is_started: bool = False
+        self.is_finished: bool = False
+        self.waiting_for_user: bool = False
+        self.last_error: Optional[str] = None
     
-    def start_debate(self, on_chunk=None, on_complete=None):
+    def start_debate(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         opening = get_opening_prompt(self.topic)
         self.prof_history.append({"role": "user", "content": opening})
         try:
@@ -38,7 +43,7 @@ class DebateOrchestrator:
             self.last_error = str(e)
             return False
     
-    def user_skip_turn(self, on_chunk=None, on_complete=None):
+    def user_skip_turn(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         if not self.waiting_for_user:
             return False
         try:
@@ -63,12 +68,10 @@ class DebateOrchestrator:
             self.is_finished = True
             return False
     
-    def user_ask_question(self, question: str, on_chunk=None, on_complete=None):
+    def user_ask_question(self, question: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         if not self.waiting_for_user:
             return False
-        
         question = self._sanitize_input(question)
-        
         context = f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\nBu soruyu yanıtla."
         self.prof_history.append({"role": "user", "content": context})
         try:
@@ -91,8 +94,8 @@ class DebateOrchestrator:
             self.waiting_for_user = False
             return False
     
-    def _professor_speaks(self, on_chunk=None, on_complete=None):
-        full_response = ""
+    def _professor_speaks(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
+        full_response: str = ""
         for chunk in chat_stream(PROFESSOR_PROMPT, self.prof_history, PROF_TEMP):
             if chunk is None:
                 return False
@@ -111,7 +114,7 @@ class DebateOrchestrator:
             on_complete("professor", full_response)
         return full_response
     
-    def _student_speaks(self, prof_last_message, on_chunk=None, on_complete=None):
+    def _student_speaks(self, prof_last_message: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
         if self.current_round < 2:
             level = "yüzeysel"
         elif self.current_round < 4:
@@ -120,7 +123,7 @@ class DebateOrchestrator:
             level = "derin"
         context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyen: {level}]\n\n{prof_last_message}"
         self.student_history.append({"role": "user", "content": context})
-        full_response = ""
+        full_response: str = ""
         for chunk in chat_stream(STUDENT_PROMPT, self.student_history, STUDENT_TEMP):
             if chunk is None:
                 return False
@@ -141,7 +144,7 @@ class DebateOrchestrator:
     
     def _sanitize_input(self, text: str) -> str:
         """Prompt injection koruması"""
-        dangerous_patterns = [
+        dangerous_patterns: list[str] = [
             "talimatları unut", "ignore instructions", "ignore previous",
             "sistem promptunu", "system prompt", "karakterinden çık",
             "role play", "sen artık", "you are now", "DAN mode",
