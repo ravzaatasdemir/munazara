@@ -28,6 +28,8 @@ class DebateOrchestrator:
         self.is_finished: bool = False
         self.waiting_for_user: bool = False
         self.last_error: Optional[str] = None
+        # Kullanıcı müdahalesi bilgisi — sonraki tura enjekte edilecek
+        self._pending_context: Optional[str] = None
     
     def start_debate(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         opening = get_opening_prompt(self.topic)
@@ -77,9 +79,12 @@ class DebateOrchestrator:
         try:
             success = self._professor_speaks(on_chunk, on_complete)
             if success:
+                # History'e ekleme! Pending context olarak sakla
                 prof_response = self.prof_history[-1]["content"]
-                summary = f"[Kullanıcı '{question}' sordu, Profesör cevapladı: '{prof_response[:120]}...']"
-                self.student_history.append({"role": "model", "content": summary})
+                self._pending_context = (
+                    f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
+                    f"Profesör ona da açıkladı: '{prof_response[:120]}...']"
+                )
                 self.current_round += 1
                 if self.current_round >= self.max_rounds:
                     self.is_finished = True
@@ -121,7 +126,14 @@ class DebateOrchestrator:
             level = "orta"
         else:
             level = "derin"
-        context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyen: {level}]\n\n{prof_last_message}"
+        
+        # Pending context varsa user mesajına birleştir
+        context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyen: {level}]"
+        if self._pending_context:
+            context += f"\n{self._pending_context}"
+            self._pending_context = None  # Kullanıldı, temizle
+        context += f"\n\n{prof_last_message}"
+        
         self.student_history.append({"role": "user", "content": context})
         full_response: str = ""
         for chunk in chat_stream(STUDENT_PROMPT, self.student_history, STUDENT_TEMP):
