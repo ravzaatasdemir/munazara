@@ -95,29 +95,53 @@ def add_message(role, content):
 
 
 def professor_speaks(is_opening=False):
-    """Profesörün konuşması"""
+    """Profesörün konuşması - STREAMING (kelime kelime)"""
     if is_opening:
         # İlk açılış
         prompt = get_opening_prompt(st.session_state.topic)
         st.session_state.prof_history.append({"role": "user", "content": prompt})
     
-    response = chat(
-        system_prompt=PROFESSOR_PROMPT,
-        history=st.session_state.prof_history,
-        temperature=PROF_TEMP,
-    )
+    # Streaming için boş placeholder
+    message_placeholder = st.empty()
+    full_response = ""
     
-    if response is None:
+    # Streaming başlat
+    from agents.gemini_client import chat_stream
+    import time
+    
+    with message_placeholder.container():
+        with st.chat_message("assistant", avatar="🎓"):
+            st.markdown("**Profesör Gültekin**\n\n")
+            text_placeholder = st.empty()
+            
+            for chunk in chat_stream(
+                system_prompt=PROFESSOR_PROMPT,
+                history=st.session_state.prof_history,
+                temperature=PROF_TEMP,
+            ):
+                if chunk is None:
+                    add_message("system", "⚠️ API hatası - Profesör cevap veremedi.")
+                    return False
+                
+                # Chunk'ı kelime kelime göster
+                words = chunk.split(' ')
+                for word in words:
+                    full_response += word + ' '
+                    text_placeholder.markdown(full_response + "▌")
+                    time.sleep(0.05)  # Her kelime arası 50ms gecikme
+            
+            text_placeholder.markdown(full_response.strip())
+    
+    if not full_response:
         add_message("system", "⚠️ API hatası - Profesör cevap veremedi.")
         return False
     
-    st.session_state.prof_history.append({"role": "model", "content": response})
-    add_message("professor", response)
-    return response
-
+    st.session_state.prof_history.append({"role": "model", "content": full_response.strip()})
+    st.session_state.messages.append({"role": "professor", "content": full_response.strip()})
+    return full_response.strip()
 
 def student_speaks(prof_last_message, current_round, max_rounds):
-    """AI Öğrencinin konuşması"""
+    """AI Öğrencinin konuşması - STREAMING (kelime kelime)"""
     # Soru seviyesi belirle
     if current_round < 2:
         level = "yüzeysel — merak ettiğin temel şeyleri sor"
@@ -131,20 +155,44 @@ def student_speaks(prof_last_message, current_round, max_rounds):
     
     st.session_state.student_history.append({"role": "user", "content": context})
     
-    response = chat(
-        system_prompt=STUDENT_PROMPT,
-        history=st.session_state.student_history,
-        temperature=STUDENT_TEMP,
-    )
+    # Streaming için boş placeholder
+    message_placeholder = st.empty()
+    full_response = ""
     
-    if response is None:
+    # Streaming başlat
+    from agents.gemini_client import chat_stream
+    import time
+    
+    with message_placeholder.container():
+        with st.chat_message("assistant", avatar="🙋"):
+            st.markdown("**Kamil**\n\n")
+            text_placeholder = st.empty()
+            
+            for chunk in chat_stream(
+                system_prompt=STUDENT_PROMPT,
+                history=st.session_state.student_history,
+                temperature=STUDENT_TEMP,
+            ):
+                if chunk is None:
+                    add_message("system", "⚠️ API hatası - Kamil cevap veremedi.")
+                    return False
+                
+                # Chunk'ı kelime kelime göster
+                words = chunk.split(' ')
+                for word in words:
+                    full_response += word + ' '
+                    text_placeholder.markdown(full_response + "▌")
+                    time.sleep(0.05)  # Her kelime arası 50ms gecikme
+            
+            text_placeholder.markdown(full_response.strip())
+    
+    if not full_response:
         add_message("system", "⚠️ API hatası - Kamil cevap veremedi.")
         return False
     
-    st.session_state.student_history.append({"role": "model", "content": response})
-    add_message("student", response)
-    return response
-
+    st.session_state.student_history.append({"role": "model", "content": full_response.strip()})
+    st.session_state.messages.append({"role": "student", "content": full_response.strip()})
+    return full_response.strip()
 
 # ===== KAVRAM GİRİŞİ =====
 if not st.session_state.debate_started:

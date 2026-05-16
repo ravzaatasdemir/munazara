@@ -2,6 +2,7 @@
 Münazara — Gemini API Wrapper
 
 Tek fonksiyon: chat(system_prompt, history, temperature) → response text
+chat_stream(system_prompt, history, temperature) → generator (streaming)
 Kişi A bu dosyayı yönetir.
 """
 
@@ -83,6 +84,65 @@ def chat(
                 return None
 
 
+def chat_stream(
+    system_prompt: str,
+    history: list[dict],
+    temperature: float = 0.7,
+    max_tokens: int = 1500,
+):
+    """
+    Gemini'a mesaj gönder, STREAMING cevap al (kelime kelime).
+
+    Args:
+        system_prompt: Ajanın karakter tanımı
+        history: Mesaj geçmişi
+        temperature: Yaratıcılık seviyesi
+        max_tokens: Maksimum cevap uzunluğu
+
+    Yields:
+        str: Her chunk (kelime/cümle parçası)
+        
+    Returns:
+        None eğer hata olursa
+    """
+    # History'yi Gemini formatına çevir
+    contents = []
+    for msg in history:
+        contents.append(
+            types.Content(
+                role=msg["role"],
+                parts=[types.Part.from_text(text=msg["content"])],
+            )
+        )
+
+    # Config
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+    )
+
+    # Streaming API çağrısı
+    try:
+        stream = _client.models.generate_content_stream(
+            model=MODEL,
+            contents=contents,
+            config=config,
+        )
+        
+        for chunk in stream:
+            if chunk.text:
+                yield chunk.text
+                
+    except Exception as e:
+        error_msg = str(e)
+        if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
+            print(f"\n⚠️ API kotası bitti.")
+        else:
+            print(f"\n❌ Streaming hatası: {e}")
+        yield None  # Hata sinyali
+
+
 # ========== HIZLI TEST ==========
 if __name__ == "__main__":
     print("🔑 API key kontrolü...")
@@ -92,6 +152,8 @@ if __name__ == "__main__":
         exit(1)
 
     print("✅ API key bulundu, test ediliyor...\n")
+    
+    # Normal test
     result = chat(
         system_prompt="Sen yardımcı bir asistansın. Türkçe cevap ver.",
         history=[{"role": "user", "content": "Merhaba, çalışıyor musun?"}],
@@ -101,4 +163,17 @@ if __name__ == "__main__":
     if result is None:
         print("❌ Test başarısız — API hatası.")
     else:
-        print(f"✅ Test başarılı!\nGemini cevabı:\n{result}")
+        print(f"✅ Normal test başarılı!\nGemini cevabı:\n{result}\n")
+    
+    # Streaming test
+    print("\n🎬 Streaming testi başlıyor...\n")
+    for chunk in chat_stream(
+        system_prompt="Sen yardımcı bir asistansın. Türkçe cevap ver.",
+        history=[{"role": "user", "content": "Streaming test - kısa bir şiir yaz"}],
+        temperature=0.7,
+    ):
+        if chunk is None:
+            print("\n❌ Streaming hatası")
+            break
+        print(chunk, end="", flush=True)
+    print("\n\n✅ Streaming test tamamlandı!")
