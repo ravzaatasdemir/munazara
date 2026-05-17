@@ -29,7 +29,11 @@ class DebateOrchestrator:
         self.last_error: Optional[str] = None
         self._pending_context: Optional[str] = None
 
-    def start_debate(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
+    def start_debate(
+        self,
+        on_chunk: ChunkCallback = None,
+        on_complete: CompleteCallback = None,
+    ) -> bool:
         opening = get_opening_prompt(self.topic)
         self.prof_history.append({"role": "user", "content": opening})
         try:
@@ -43,21 +47,26 @@ class DebateOrchestrator:
             self.last_error = str(e)
             return False
 
-    def user_skip_turn(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
+    def user_skip_turn(
+        self,
+        on_chunk: ChunkCallback = None,
+        on_complete: CompleteCallback = None,
+    ) -> bool:
         if not self.waiting_for_user:
             return False
         try:
             prof_last = self.prof_history[-1]["content"]
-            student_success = self._student_speaks(prof_last, on_chunk, on_complete)
-            if not student_success:
+            if not self._student_speaks(prof_last, on_chunk, on_complete):
                 self.is_finished = True
                 return False
+
             student_last = self.student_history[-1]["content"]
             self.prof_history.append({"role": "user", "content": student_last})
-            prof_success = self._professor_speaks(on_chunk, on_complete)
-            if not prof_success:
+
+            if not self._professor_speaks(on_chunk, on_complete):
                 self.is_finished = True
                 return False
+
             self.current_round += 1
             if self.current_round >= self.max_rounds:
                 self.is_finished = True
@@ -68,35 +77,53 @@ class DebateOrchestrator:
             self.is_finished = True
             return False
 
-    def user_ask_question(self, question: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
+    def user_ask_question(
+        self,
+        question: str,
+        on_chunk: ChunkCallback = None,
+        on_complete: CompleteCallback = None,
+    ) -> bool:
         if not self.waiting_for_user:
             return False
+
         question = self._sanitize_input(question)
-        context = f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\nBu soruyu yanıtla."
+        context = (
+            f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\n"
+            f"Bu soruyu yanıtla."
+        )
         self.prof_history.append({"role": "user", "content": context})
         try:
-            success = self._professor_speaks(on_chunk, on_complete)
-            if success:
-                prof_response = self.prof_history[-1]["content"]
-                self._pending_context = (
-                    f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
-                    f"Profesör ona da açıkladı: '{prof_response[:120]}...']"
-                )
-                self.current_round += 1
-                if self.current_round >= self.max_rounds:
-                    self.is_finished = True
-                    self.waiting_for_user = False
-            else:
+            if not self._professor_speaks(on_chunk, on_complete):
                 self.is_finished = True
                 self.waiting_for_user = False
-            return success
+                return False
+
+            prof_response = self.prof_history[-1]["content"]
+            self._pending_context = (
+                f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
+                f"Profesör ona da açıkladı: '{prof_response[:120]}...']"
+            )
+            self.current_round += 1
+            if self.current_round >= self.max_rounds:
+                self.is_finished = True
+                self.waiting_for_user = False
+            return True
         except MunazaraError as e:
             self.last_error = str(e)
             self.is_finished = True
             self.waiting_for_user = False
             return False
 
-    def _professor_speaks(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
+    # ------------------------------------------------------------------
+    # İÇ METODLAR
+    # ------------------------------------------------------------------
+
+    def _professor_speaks(
+        self,
+        on_chunk: ChunkCallback = None,
+        on_complete: CompleteCallback = None,
+    ) -> bool:
+        """Profesörü konuştur. Başarılı ise True döner."""  # fix 2: tutarlı bool
         full_response: str = ""
         for chunk in chat_stream(PROFESSOR_PROMPT, self.prof_history, PROF_TEMP):
             if chunk is None:
@@ -104,16 +131,24 @@ class DebateOrchestrator:
             full_response += chunk
             if on_chunk:
                 on_chunk("professor", chunk)
+
         full_response = full_response.strip()
         if not full_response:
             return False
+
         self.prof_history.append({"role": "model", "content": full_response})
         self.messages.append({"role": "professor", "content": full_response})
         if on_complete:
             on_complete("professor", full_response)
-        return full_response
+        return True
 
-    def _student_speaks(self, prof_last_message: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
+    def _student_speaks(
+        self,
+        prof_last_message: str,
+        on_chunk: ChunkCallback = None,
+        on_complete: CompleteCallback = None,
+    ) -> bool:
+        """Öğrenciyi konuştur. Başarılı ise True döner."""  # fix 2: tutarlı bool
         if self.current_round < 2:
             level = "yüzeysel"
         elif self.current_round < 4:
@@ -121,7 +156,7 @@ class DebateOrchestrator:
         else:
             level = "derin"
 
-        context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyen: {level}]"
+        context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyesi: {level}]"
         if self._pending_context:
             context += f"\n{self._pending_context}"
             self._pending_context = None
@@ -135,17 +170,19 @@ class DebateOrchestrator:
             full_response += chunk
             if on_chunk:
                 on_chunk("student", chunk)
+
         full_response = full_response.strip()
         if not full_response:
             return False
+
         self.student_history.append({"role": "model", "content": full_response})
         self.messages.append({"role": "student", "content": full_response})
         if on_complete:
             on_complete("student", full_response)
-        return full_response
+        return True
 
     def _sanitize_input(self, text: str) -> str:
-        """Prompt injection koruması"""
+        """Prompt injection koruması."""
         dangerous_patterns: list[str] = [
             "talimatları unut", "ignore instructions", "ignore previous",
             "sistem promptunu", "system prompt", "karakterinden çık",
