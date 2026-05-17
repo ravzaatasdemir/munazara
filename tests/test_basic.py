@@ -1,9 +1,11 @@
 """
-Münazara — Integration Testler (v4)
+Münazara — Integration Testler (v5)
 
-Değişiklikler:
-- msg["role"] → msg.role, msg["speaker"] → msg.speaker (dataclass uyumu)
-- TestKeywordMatching sınıfı eklendi (FIX: token bazlı eşleşme)
+Değişiklikler v4 → v5:
+- TestMaxUserQuestions: soru limiti testleri eklendi.
+- TestTranscriptTrimming: uzun transcript kırpma testi eklendi.
+- TestKeywordMatching: bigram eşleşme testleri eklendi.
+- TestQuestionsRemaining: property testleri eklendi.
 """
 
 import pytest
@@ -147,6 +149,19 @@ class TestDebateFlow:
         assert o.is_finished
         assert not o.waiting_for_user
 
+    def test_waiting_for_user_true_between_rounds(self):
+        """FIX: user_skip_turn sonrası waiting_for_user True kalmalı."""
+        with _patch_stream(
+            prof_responses=["A.", "B."],
+            student_responses=["a?"],
+        ):
+            o = DebateOrchestrator("Test", max_rounds=5)
+            o.start_debate()
+            o.user_skip_turn()
+
+        assert o.waiting_for_user is True
+        assert not o.is_finished
+
     def test_messages_order_professor_student_professor(self):
         with _patch_stream(
             prof_responses=["Prof 1.", "Prof 2."],
@@ -207,7 +222,7 @@ class TestRoundCounting:
             prof_responses=["A.", "Q1.", "Q2.", "Q3.", "B.", "C.", "D.", "E."],
             student_responses=["a?", "b?", "c?", "d?"],
         ):
-            o = DebateOrchestrator("Test", max_rounds=5)
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=10)
             o.start_debate()
             o.user_ask_question("Soru 1?")
             o.user_ask_question("Soru 2?")
@@ -231,6 +246,116 @@ class TestRoundCounting:
             assert o.user_question_count == 1
             o.user_ask_question("İki?")
             assert o.user_question_count == 2
+
+
+class TestMaxUserQuestions:
+    """Soru limiti testleri."""
+
+    def test_default_max_questions_is_three(self):
+        o = DebateOrchestrator("Test")
+        assert o.max_user_questions == 3
+
+    def test_custom_max_questions(self):
+        o = DebateOrchestrator("Test", max_user_questions=5)
+        assert o.max_user_questions == 5
+
+    def test_questions_remaining_decrements(self):
+        with _patch_stream(prof_responses=["A.", "Q1.", "Q2.", "Q3."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=3)
+            o.start_debate()
+            assert o.questions_remaining == 3
+            o.user_ask_question("Soru 1?")
+            assert o.questions_remaining == 2
+            o.user_ask_question("Soru 2?")
+            assert o.questions_remaining == 1
+            o.user_ask_question("Soru 3?")
+            assert o.questions_remaining == 0
+
+    def test_question_blocked_at_limit(self):
+        with _patch_stream(prof_responses=["A.", "Q1.", "Q2.", "Q3."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=2)
+            o.start_debate()
+            o.user_ask_question("Soru 1?")
+            o.user_ask_question("Soru 2?")
+            result = o.user_ask_question("Soru 3?")  # limit aşıldı
+
+        assert result is False
+        assert o.last_error is not None
+        assert "hak" in o.last_error.lower() or "limit" in o.last_error.lower() or "bitti" in o.last_error.lower()
+
+    def test_can_ask_question_property(self):
+        with _patch_stream(prof_responses=["A.", "Q1."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=1)
+            o.start_debate()
+            assert o.can_ask_question is True
+            o.user_ask_question("Soru?")
+            assert o.can_ask_question is False
+
+    def test_blocked_question_doesnt_increment_count(self):
+        with _patch_stream(prof_responses=["A.", "Q1."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=1)
+            o.start_debate()
+            o.user_ask_question("Soru 1?")
+            o.user_ask_question("Soru 2?")  # bloklandı
+
+        assert o.user_question_count == 1  # sadece ilk soru sayıldı
+
+    def test_debate_not_finished_after_limit_reached(self):
+        """Soru limiti dolunca tartışma bitmemeli, sadece soru engellenmeli."""
+        with _patch_stream(prof_responses=["A.", "Q1."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=1)
+            o.start_debate()
+            o.user_ask_question("Soru 1?")
+            o.user_ask_question("Soru 2?")  # bloklandı
+
+        assert not o.is_finished
+        assert o.waiting_for_user
+
+
+class TestTranscriptTrimming:
+    """Uzun transcript kırpma testleri."""
+
+    def test_short_transcript_not_trimmed(self):
+        with _patch_stream(prof_responses=["Kısa açıklama."], student_responses=[]):
+            o = DebateOrchestrator("Test", max_rounds=3)
+            o.start_debate()
+            o.messages.append(
+                __import__("agents.models", fromlist=["Message"]).Message(
+                    role="student", content="Kısa soru."
+                )
+            )
+
+        def fake_stream(system_prompt, history, **kwargs):
+            # Transcript'te kısaltma notu olmamalı
+            content = history[0]["content"]
+            assert "kısaltıldı" not in content
+            yield "Özet."
+
+        with patch("agents.orchestrator.chat_stream", side_effect=fake_stream):
+            o.generate_summary()
+
+    def test_long_transcript_trimmed(self):
+        """4000 karakteri aşan transcript kırpılmalı."""
+        from agents.orchestrator import MAX_TRANSCRIPT_CHARS
+        from agents.models import Message
+
+        o = DebateOrchestrator("Test", max_rounds=3)
+        # 4000+ karakter olacak şekilde uzun mesajlar ekle
+        long_content = "X" * (MAX_TRANSCRIPT_CHARS + 500)
+        o.messages.append(Message(role="professor", content=long_content))
+        o.messages.append(Message(role="student", content="Kısa soru."))
+
+        captured = {}
+
+        def fake_stream(system_prompt, history, **kwargs):
+            captured["content"] = history[0]["content"]
+            yield "Özet."
+
+        with patch("agents.orchestrator.chat_stream", side_effect=fake_stream):
+            o.generate_summary()
+
+        assert "kısaltıldı" in captured["content"]
+        assert len(captured["content"]) < MAX_TRANSCRIPT_CHARS + 200  # padding toleransı
 
 
 class TestSummaryStreaming:
@@ -290,13 +415,13 @@ class TestSummaryStreaming:
 
 
 class TestKeywordMatching:
-    """FIX: Token bazlı keyword matching testleri."""
+    """Token + bigram bazlı keyword matching testleri."""
 
+    # Mevcut testler
     def test_exact_match(self):
         assert _matches_any("türev nedir", _MATH_KEYWORDS)
 
     def test_turkish_suffix_match(self):
-        """'integrali' → 'integral' keyword'ünü yakalamalı."""
         assert _matches_any("integrali anlat", _MATH_KEYWORDS)
 
     def test_uppercase_insensitive(self):
@@ -308,6 +433,27 @@ class TestKeywordMatching:
     def test_cs_keyword_with_suffix(self):
         assert _matches_any("handshake'i açıkla", _CS_KEYWORDS)
 
+    # YENİ: Bigram testleri
+    def test_bigram_exact_match(self):
+        """'diferansiyel denklem' tam bigram eşleşmesi."""
+        assert _matches_any("diferansiyel denklem nedir", _MATH_KEYWORDS)
+
+    def test_bigram_with_turkish_suffix(self):
+        """'diferansiyel denklemler' → 'diferansiyel denklem' yakalanmalı."""
+        assert _matches_any("diferansiyel denklemler çok zor", _MATH_KEYWORDS)
+
+    def test_bigram_no_false_positive(self):
+        """Bigram olmayan 'diferansiyel' tek başına math değil (yaml'da yok)."""
+        # Sadece 'diferansiyel denklem' var; tek 'diferansiyel' yok
+        # Bu test yaml'a bağlı — tek kelimeli 'diferansiyel' eklenmemişse False
+        result = _matches_any("diferansiyel hesap", _MATH_KEYWORDS)
+        # "diferansiyel hesap" bir bigram keyword değil → False olmalı
+        assert result is False
+
+    def test_cs_bigram_match(self):
+        """'makine öğrenmesi' CS keyword'ü."""
+        assert _matches_any("makine öğrenmesi nedir", _CS_KEYWORDS)
+
     def test_opening_prompt_routes_correctly(self):
         math_prompt = get_opening_prompt("integrali anlat")
         assert "Sokratik" in math_prompt
@@ -317,6 +463,11 @@ class TestKeywordMatching:
 
         generic_prompt = get_opening_prompt("bilinç nedir")
         assert "sade" in generic_prompt
+
+    def test_bigram_opening_prompt_routes(self):
+        """Bigram keyword ile açılış prompt'u doğru route edilmeli."""
+        math_prompt = get_opening_prompt("diferansiyel denklem nedir")
+        assert "Sokratik" in math_prompt
 
 
 class TestErrorRecovery:

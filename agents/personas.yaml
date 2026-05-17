@@ -96,6 +96,14 @@ topic_keywords:
     - matris
     - vektör
     - logaritma
+    - trigonometri
+    - istatistik
+    - diferansiyel denklem
+    - vektörel çarpım
+    - taylor serisi
+    - fourier dönüşümü
+    - sayı teorisi
+    - kombinatorik
   history:
     - sanayi
     - devrim
@@ -105,6 +113,12 @@ topic_keywords:
     - aydınlanma
     - tarih
     - imparatorluk
+    - soğuk savaş
+    - fransız devrimi
+    - birinci dünya savaşı
+    - ikinci dünya savaşı
+    - antik yunan
+    - roma imparatorluğu
   cs:
     - tcp
     - ip
@@ -114,6 +128,17 @@ topic_keywords:
     - yazılım
     - donanım
     - handshake
+    - veri yapısı
+    - makine öğrenmesi
+    - yapay zeka
+    - nesne yönelimli
+    - işletim sistemi
+    - bellek yönetimi
+    - binary tree
+    - linked list
+    - big o
+    - zaman karmaşıklığı
+    - sıralama algoritması
   econ:
     - arz
     - talep
@@ -124,3 +149,9 @@ topic_keywords:
     - büyüme
     - gdp
     - gsyh
+    - para politikası
+    - maliye politikası
+    - merkez bankası
+    - döviz kuru
+    - stagflasyon
+    - fırsat maliyeti

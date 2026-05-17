@@ -1,11 +1,15 @@
 ﻿"""
-Münazara — Orchestrator (v4)
+Münazara — Orchestrator (v5)
 
-Değişiklikler v3 → v4:
-- dict[str, str] yerine Message ve HistoryEntry dataclass'ları kullanılıyor.
-  self.messages: list[Message]
-  self.shared_history: list[HistoryEntry]
-  Erişim artık msg["role"] değil, msg.role şeklinde.
+Değişiklikler v4 → v5:
+- max_user_questions parametresi eklendi (varsayılan: 3).
+  user_ask_question() artık bu limiti aşınca False döner ve
+  last_error'a kullanıcıya gösterilebilir bir mesaj yazar.
+- questions_remaining property eklendi (UI için).
+- generate_summary() transcript'i MAX_TRANSCRIPT_CHARS ile kırpar;
+  uzun tartışmalarda Gemini token limitini aşmaz.
+- user_skip_turn() çağrısında waiting_for_user False → True düzeltmesi:
+  limit dolmadıkça beklemeye devam edilir.
 """
 
 from __future__ import annotations
@@ -17,15 +21,22 @@ from agents.exceptions import MunazaraError
 
 PROF_TEMP: float = 0.3
 STUDENT_TEMP: float = 0.7
+MAX_TRANSCRIPT_CHARS: int = 4000  # ~1000 token — Gemini için güvenli üst sınır
 
 ChunkCallback = Optional[Callable[[str, str], None]]
 CompleteCallback = Optional[Callable[[str, str], None]]
 
 
 class DebateOrchestrator:
-    def __init__(self, topic: str, max_rounds: int = 5) -> None:
+    def __init__(
+        self,
+        topic: str,
+        max_rounds: int = 5,
+        max_user_questions: int = 3,
+    ) -> None:
         self.topic: str = topic
         self.max_rounds: int = max_rounds
+        self.max_user_questions: int = max_user_questions
         self.current_round: int = 0
         self.user_question_count: int = 0
 
@@ -38,6 +49,18 @@ class DebateOrchestrator:
         self.last_error: Optional[str] = None
         self.summary: Optional[str] = None
         self.summary_error: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # PROPERTY'LER
+    # ------------------------------------------------------------------
+
+    @property
+    def questions_remaining(self) -> int:
+        return max(0, self.max_user_questions - self.user_question_count)
+
+    @property
+    def can_ask_question(self) -> bool:
+        return self.waiting_for_user and self.questions_remaining > 0
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -86,6 +109,8 @@ class DebateOrchestrator:
             if self.current_round >= self.max_rounds:
                 self.is_finished = True
                 self.waiting_for_user = False
+            else:
+                self.waiting_for_user = True  # FIX: açıkça True yap
             return True
         except MunazaraError as e:
             self.last_error = str(e)
@@ -104,6 +129,14 @@ class DebateOrchestrator:
         on_complete: CompleteCallback = None,
     ) -> bool:
         if not self.waiting_for_user:
+            return False
+
+        # Soru limiti kontrolü
+        if self.user_question_count >= self.max_user_questions:
+            self.last_error = (
+                f"Soru hakkınız bitti ({self.max_user_questions}/{self.max_user_questions}). "
+                f"Tartışmaya devam etmek için 'Turumu atla' butonunu kullanın."
+            )
             return False
 
         question = self._sanitize_input(question)
@@ -150,6 +183,16 @@ class DebateOrchestrator:
             return None
 
         transcript = "\n\n".join(lines)
+
+        # Token limit koruması: çok uzun transcript'leri kırp
+        if len(transcript) > MAX_TRANSCRIPT_CHARS:
+            transcript = transcript[-MAX_TRANSCRIPT_CHARS:]
+            # Yarım cümleden başlamamak için ilk satır sonuna kadar at
+            first_newline = transcript.find("\n")
+            if first_newline > 0:
+                transcript = transcript[first_newline + 1:]
+            transcript = "[...tartışmanın önceki kısımları kısaltıldı...]\n\n" + transcript
+
         full_response = ""
 
         try:

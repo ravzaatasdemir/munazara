@@ -3,8 +3,14 @@ Münazara — Streamlit Arayüzü
 
 Çalıştırmak için: streamlit run ui/app.py
 
-Değişiklikler (v4):
-- msg["role"] / msg["content"] → msg.role / msg.content (dataclass uyumu)
+Değişiklikler (v5):
+- is_streaming flag'i eklendi: streaming sırasında butonlar devre dışı bırakılır,
+  race condition önlenir.
+- Ana arayüze tur sayacı (progress bar + badge) eklendi.
+- Soru hakkı göstergesi: kaç hak kaldığını kullanıcı görür, bitince buton gizlenir.
+- Demo modunda indirilen .txt başlığına "DEMO" notu eklendi.
+- Orchestrator max_user_questions=3 ile oluşturuluyor; UI bunu yansıtıyor.
+- HF deployment için os.environ önceliği korunuyor (gemini_client.py'de zaten var).
 """
 
 import sys
@@ -42,17 +48,19 @@ class StreamState:
 def _init_state():
     defaults = {
         "orchestrator": None,
-        "messages": [],       # list[Message]
+        "messages": [],        # list[Message]
         "user_asking": False,
         "history": [],
         "demo_mode": False,
         "current_topic": None,
         "max_rounds": 5,
         "debate_summary": None,
+        "is_streaming": False,  # FIX: race condition guard
     }
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
+
 
 _init_state()
 
@@ -64,7 +72,10 @@ def add_message(role: str, content: str) -> None:
 
 def show_message(msg: Message) -> None:
     avatar_map = {"professor": "🎓", "student": "🙋", "user": "🧑", "system": "⚙️"}
-    label_map = {"professor": "**Profesör Gültekin**\n\n", "student": "**Kamil**\n\n"}
+    label_map = {
+        "professor": "**Profesör Gültekin**\n\n",
+        "student": "**Kamil**\n\n",
+    }
 
     if msg.role in ("professor", "student"):
         with st.chat_message("assistant", avatar=avatar_map[msg.role]):
@@ -93,6 +104,7 @@ def reset_session(save_to_history: bool = True) -> None:
     st.session_state.demo_mode = False
     st.session_state.current_topic = None
     st.session_state.debate_summary = None
+    st.session_state.is_streaming = False
 
 
 def get_download_text() -> str:
@@ -103,6 +115,11 @@ def get_download_text() -> str:
         "system": "---",
     }
     lines = []
+
+    # FIX: demo modunda başlığa not ekle
+    if st.session_state.demo_mode:
+        lines.append("=== DEMO TARTIŞMASI (gerçek API kullanılmamıştır) ===\n")
+
     for msg in st.session_state.messages:
         label = label_map.get(msg.role, msg.role.upper())
         lines.append(f"[{label}]\n{msg.content}\n")
@@ -113,6 +130,23 @@ def get_download_text() -> str:
         lines.append(st.session_state.debate_summary)
 
     return "\n".join(lines)
+
+
+def _show_turn_progress(orch: DebateOrchestrator) -> None:
+    """Tur sayacını ana arayüzde göster."""
+    col_a, col_b, col_c = st.columns([2, 1, 1])
+    with col_a:
+        st.progress(
+            orch.current_round / orch.max_rounds,
+            text=f"Tur {orch.current_round} / {orch.max_rounds}",
+        )
+    with col_b:
+        q_remaining = orch.questions_remaining
+        color = "🟢" if q_remaining > 1 else ("🟡" if q_remaining == 1 else "🔴")
+        st.caption(f"{color} **{q_remaining}** soru hakkı")
+    with col_c:
+        if orch.user_question_count:
+            st.caption(f"❓ {orch.user_question_count} soru soruldu")
 
 
 # ===== BAŞLIK =====
@@ -155,10 +189,9 @@ with st.sidebar:
 
         if st.session_state.orchestrator:
             orch = st.session_state.orchestrator
-            q_count = orch.user_question_count
             st.caption(
                 f"**Tur:** {orch.current_round} / {orch.max_rounds}"
-                + (f"  |  ❓ {q_count} soru" if q_count else "")
+                f"  |  ❓ {orch.user_question_count}/{orch.max_user_questions} soru"
             )
             st.progress(orch.current_round / orch.max_rounds)
 
@@ -218,7 +251,9 @@ if is_idle:
             st.session_state.demo_mode = True
             st.session_state.current_topic = DEMO_TOPIC
             for m in DEMO_MESSAGES:
-                st.session_state.messages.append(Message(role=m["role"], content=m["content"]))
+                st.session_state.messages.append(
+                    Message(role=m["role"], content=m["content"])
+                )
             st.rerun()
     with col_info:
         st.caption("API key gerektirmez. Örnek bir tartışmayı izleyin.")
@@ -241,8 +276,11 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
         show_message(st.session_state.messages[-1])
 
         st.session_state.orchestrator = DebateOrchestrator(
-            topic, max_rounds=st.session_state.max_rounds
+            topic,
+            max_rounds=st.session_state.max_rounds,
+            max_user_questions=3,
         )
+        st.session_state.is_streaming = True
 
         placeholder = st.empty()
         state = StreamState()
@@ -272,6 +310,8 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
             add_message("system", f"❌ Beklenmeyen hata: {e}")
             st.session_state.orchestrator.is_finished = True
             st.session_state.orchestrator.waiting_for_user = False
+        finally:
+            st.session_state.is_streaming = False
 
         st.rerun()
 
@@ -282,14 +322,26 @@ elif (
     and st.session_state.orchestrator is not None
     and st.session_state.orchestrator.waiting_for_user
     and not st.session_state.user_asking
+    and not st.session_state.is_streaming
 ):
+    orch = st.session_state.orchestrator
     st.divider()
+
+    # Tur sayacı — ana arayüzde görünür
+    _show_turn_progress(orch)
+
     st.markdown("### 💬 Sıra sende!")
 
+    q_remaining = orch.questions_remaining
     col1, col2 = st.columns(2)
 
     with col1:
-        if st.button("⏭️ Turumu atla (Kamil sorsun)", use_container_width=True):
+        if st.button(
+            "⏭️ Turumu atla (Kamil sorsun)",
+            use_container_width=True,
+            disabled=st.session_state.is_streaming,
+        ):
+            st.session_state.is_streaming = True
             student_ph = st.empty()
             prof_ph = st.empty()
             state = StreamState()
@@ -304,44 +356,62 @@ elif (
                     state.prof_response += chunk
                     with prof_ph.container():
                         with st.chat_message("assistant", avatar="🎓"):
-                            st.markdown(f"**Profesör Gültekin**\n\n{state.prof_response}▌")
+                            st.markdown(
+                                f"**Profesör Gültekin**\n\n{state.prof_response}▌"
+                            )
 
             def on_complete_skip(role: str, message: str) -> None:
                 pass
 
-            orch_msg_count_before = len(st.session_state.orchestrator.messages)
+            orch_msg_count_before = len(orch.messages)
 
             try:
                 with st.spinner("Kamil ve Profesör konuşuyor..."):
-                    success = st.session_state.orchestrator.user_skip_turn(
-                        on_chunk_skip, on_complete_skip
-                    )
+                    success = orch.user_skip_turn(on_chunk_skip, on_complete_skip)
                 if success:
-                    new_msgs = st.session_state.orchestrator.messages[orch_msg_count_before:]
+                    new_msgs = orch.messages[orch_msg_count_before:]
                     for m in new_msgs:
                         add_message(m.role, m.content)
                 else:
-                    err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                    err = orch.last_error or "Bilinmeyen hata"
                     add_message("system", f"❌ {err}")
-                if st.session_state.orchestrator.is_finished:
+                if orch.is_finished:
                     add_message("system", "✅ Tartışma tamamlandı!")
             except Exception as e:
                 add_message("system", f"❌ Beklenmeyen hata: {e}")
-                st.session_state.orchestrator.is_finished = True
-                st.session_state.orchestrator.waiting_for_user = False
+                orch.is_finished = True
+                orch.waiting_for_user = False
+            finally:
+                st.session_state.is_streaming = False
 
             st.rerun()
 
     with col2:
-        if st.button("❓ Ben soru soracağım", use_container_width=True):
-            st.session_state.user_asking = True
-            st.rerun()
+        if q_remaining > 0:
+            btn_label = f"❓ Ben soru soracağım ({q_remaining} hak)"
+            if st.button(
+                btn_label,
+                use_container_width=True,
+                disabled=st.session_state.is_streaming,
+            ):
+                st.session_state.user_asking = True
+                st.rerun()
+        else:
+            st.button(
+                "❓ Soru hakkı kalmadı",
+                use_container_width=True,
+                disabled=True,
+                help="Maksimum soru sayısına ulaştınız. Tartışmaya devam etmek için 'Turumu atla'yı kullanın.",
+            )
 
 
 # ===== KULLANICI SORU SORUYOR =====
 elif not st.session_state.demo_mode and st.session_state.user_asking:
+    orch = st.session_state.orchestrator
     st.divider()
-    st.markdown("### 💬 Sorunuzu yazın:")
+
+    q_remaining = orch.questions_remaining
+    st.markdown(f"### 💬 Sorunuzu yazın: &nbsp; _{q_remaining} hak kaldı_")
 
     user_question = st.chat_input("Profesöre sormak istediğiniz soruyu yazın...")
 
@@ -349,6 +419,7 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
         add_message("user", f"❓ **Soru:** {user_question}")
         show_message(st.session_state.messages[-1])
 
+        st.session_state.is_streaming = True
         placeholder = st.empty()
         state = StreamState()
 
@@ -356,36 +427,40 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
             state.full_response += chunk
             with placeholder.container():
                 with st.chat_message("assistant", avatar="🎓"):
-                    st.markdown(f"**Profesör Gültekin**\n\n{state.full_response}▌")
+                    st.markdown(
+                        f"**Profesör Gültekin**\n\n{state.full_response}▌"
+                    )
 
         def on_complete_q(role: str, message: str) -> None:
             placeholder.empty()
 
-        orch_msg_count_before = len(st.session_state.orchestrator.messages)
+        orch_msg_count_before = len(orch.messages)
 
         try:
             with st.spinner("Profesör cevaplıyor..."):
-                success = st.session_state.orchestrator.user_ask_question(
+                success = orch.user_ask_question(
                     user_question, on_chunk_q, on_complete_q
                 )
             if success:
-                new_msgs = st.session_state.orchestrator.messages[orch_msg_count_before:]
+                new_msgs = orch.messages[orch_msg_count_before:]
                 for m in new_msgs:
                     if m.role == "professor":
                         add_message(m.role, m.content)
                         break
             else:
-                err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                err = orch.last_error or "Bilinmeyen hata"
                 add_message("system", f"❌ {err}")
         except Exception as e:
             placeholder.empty()
             add_message("system", f"❌ Beklenmeyen hata: {e}")
-            st.session_state.orchestrator.is_finished = True
-            st.session_state.orchestrator.waiting_for_user = False
+            orch.is_finished = True
+            orch.waiting_for_user = False
+        finally:
+            st.session_state.is_streaming = False
 
         st.session_state.user_asking = False
 
-        if st.session_state.orchestrator.is_finished:
+        if orch.is_finished:
             add_message("system", "✅ Tartışma tamamlandı!")
 
         st.rerun()
@@ -397,7 +472,10 @@ elif (
     and st.session_state.orchestrator is not None
     and st.session_state.orchestrator.is_finished
 ):
-    if st.session_state.debate_summary is None and st.session_state.orchestrator.summary is None:
+    if (
+        st.session_state.debate_summary is None
+        and st.session_state.orchestrator.summary is None
+    ):
         st.divider()
         st.markdown("### 📋 Öğrenme Özeti")
         summary_ph = st.empty()
@@ -407,19 +485,25 @@ elif (
             state.full_response += chunk
             summary_ph.markdown(state.full_response + "▌")
 
-        summary = st.session_state.orchestrator.generate_summary(on_chunk=on_summary_chunk)
+        summary = st.session_state.orchestrator.generate_summary(
+            on_chunk=on_summary_chunk
+        )
         summary_ph.empty()
 
         if summary:
             st.session_state.debate_summary = summary
         else:
             err = getattr(st.session_state.orchestrator, "summary_error", None)
-            st.session_state.debate_summary = f"__HATA__{err or 'Tartışma verisi boş.'}"
+            st.session_state.debate_summary = (
+                f"__HATA__{err or 'Tartışma verisi boş.'}"
+            )
         st.rerun()
 
     st.divider()
 
-    if st.session_state.debate_summary and st.session_state.debate_summary.startswith("__HATA__"):
+    if st.session_state.debate_summary and st.session_state.debate_summary.startswith(
+        "__HATA__"
+    ):
         hata_detay = st.session_state.debate_summary.replace("__HATA__", "")
         st.warning(f"📋 Öğrenme özeti üretilemedi: {hata_detay}")
     elif st.session_state.debate_summary:
