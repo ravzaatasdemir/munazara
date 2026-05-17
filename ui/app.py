@@ -379,11 +379,12 @@ elif (
                             st.markdown(f"**Profesör Gültekin**\n\n{state.prof_response}▌")
 
             def on_complete_skip(role: str, message: str) -> None:
-                # sadece placeholder temizle, state yazma yok
-                if role == "student":
-                    student_ph.empty()
-                elif role == "professor":
-                    prof_ph.empty()
+                # placeholder'ı temizleme — içerik st.rerun()'a kadar görünür kalsın,
+                # rerun zaten sayfayı sıfırdan render eder, göz kırpma olmaz
+                pass
+
+            # API çağrısından ÖNCE mevcut mesaj sayısını sabitle — kırılgan indeksten kaçın
+            orch_msg_count_before = len(st.session_state.orchestrator.messages)
 
             try:
                 with st.spinner("Kamil ve Profesör konuşuyor..."):
@@ -392,9 +393,7 @@ elif (
                     )
                 # State yazımı spinner bittikten sonra — güvenli bölge
                 if success:
-                    orch_msgs = st.session_state.orchestrator.messages
-                    # Son iki mesaj: student sonra professor (user_skip_turn sırası)
-                    new_msgs = orch_msgs[len(st.session_state.messages):]
+                    new_msgs = st.session_state.orchestrator.messages[orch_msg_count_before:]
                     for m in new_msgs:
                         add_message(m["role"], m["content"])
                 else:
@@ -403,8 +402,6 @@ elif (
                 if st.session_state.orchestrator.is_finished:
                     add_message("system", "✅ Tartışma tamamlandı!")
             except Exception as e:
-                student_ph.empty()
-                prof_ph.empty()
                 add_message("system", f"❌ Beklenmeyen hata: {e}")
                 st.session_state.orchestrator.is_finished = True
                 st.session_state.orchestrator.waiting_for_user = False
@@ -440,6 +437,9 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
         def on_complete_q(role: str, message: str) -> None:
             placeholder.empty()  # sadece placeholder temizle
 
+        # API çağrısından ÖNCE mevcut mesaj sayısını sabitle
+        orch_msg_count_before = len(st.session_state.orchestrator.messages)
+
         try:
             with st.spinner("Profesör cevaplıyor..."):
                 success = st.session_state.orchestrator.user_ask_question(
@@ -447,7 +447,7 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
                 )
             # State yazımı spinner bittikten sonra — güvenli bölge
             if success:
-                new_msgs = st.session_state.orchestrator.messages[len(st.session_state.messages) - 1:]
+                new_msgs = st.session_state.orchestrator.messages[orch_msg_count_before:]
                 for m in new_msgs:
                     if m["role"] == "professor":
                         add_message("professor", m["content"])
