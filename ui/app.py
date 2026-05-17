@@ -116,9 +116,8 @@ if st.session_state.orchestrator is None:
             success = st.session_state.orchestrator.start_debate(on_chunk, on_complete)
         
         if not success:
-            if not success:
-                error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
-                add_message("system", f"❌ {error_msg}")
+            error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+            add_message("system", f"❌ {error_msg}")
         
         st.rerun()
 
@@ -230,9 +229,8 @@ elif st.session_state.user_asking:
             )
         
         if not success:
-            if not success:
-                error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
-                add_message("system", f"❌ {error_msg}")
+            error_msg = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+            add_message("system", f"❌ {error_msg}")
         
         st.session_state.user_asking = False
         
