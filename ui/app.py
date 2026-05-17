@@ -2,6 +2,12 @@
 Münazara — Streamlit Arayüzü
 
 Çalıştırmak için: streamlit run ui/app.py
+
+Değişiklikler (v2):
+- Double render hatası düzeltildi: on_complete callback'lerinden show_message kaldırıldı.
+  Tek kaynak of truth = st.session_state.messages; st.rerun() render'ı halleder.
+- Sidebar'a tur sayısı slider'ı eklendi.
+- Tartışma bitince öğrenme özeti gösteriliyor (generate_summary).
 """
 
 import sys
@@ -25,7 +31,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ===== FIX 1: StreamState tek yerde tanımlandı =====
+
 class StreamState:
     """Streaming callback'lerinde ajan yanıtlarını biriktirir."""
     def __init__(self):
@@ -34,7 +40,7 @@ class StreamState:
         self.prof_response: str = ""
 
 
-# ===== FIX 7: Demo verisi =====
+# ===== DEMO VERİSİ =====
 DEMO_TOPIC = "Türev nedir"
 DEMO_MESSAGES = [
     {
@@ -100,18 +106,22 @@ DEMO_MESSAGES = [
 
 
 # ===== SESSION STATE =====
-if "orchestrator" not in st.session_state:
-    st.session_state.orchestrator = None
-if "messages" not in st.session_state:
-    st.session_state.messages = []
-if "user_asking" not in st.session_state:
-    st.session_state.user_asking = False
-if "history" not in st.session_state:
-    st.session_state.history = []          # fix 5: geçmiş tartışmalar
-if "demo_mode" not in st.session_state:
-    st.session_state.demo_mode = False     # fix 7
-if "current_topic" not in st.session_state:
-    st.session_state.current_topic = None
+def _init_state():
+    defaults = {
+        "orchestrator": None,
+        "messages": [],
+        "user_asking": False,
+        "history": [],
+        "demo_mode": False,
+        "current_topic": None,
+        "max_rounds": 5,
+        "debate_summary": None,
+    }
+    for key, val in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = val
+
+_init_state()
 
 
 # ===== YARDIMCI FONKSİYONLAR =====
@@ -135,7 +145,6 @@ def show_message(role: str, content: str) -> None:
 
 
 def reset_session(save_to_history: bool = True) -> None:
-    """Oturumu sıfırla; isteğe bağlı olarak geçmişe kaydet. (fix 4)"""
     if (
         save_to_history
         and st.session_state.messages
@@ -150,10 +159,10 @@ def reset_session(save_to_history: bool = True) -> None:
     st.session_state.user_asking = False
     st.session_state.demo_mode = False
     st.session_state.current_topic = None
+    st.session_state.debate_summary = None
 
 
 def get_download_text() -> str:
-    """Tartışmayı düz metne çevir. (fix 6)"""
     label_map = {
         "professor": "PROFESÖR GÜLTEKİN",
         "student": "KAMİL",
@@ -164,6 +173,12 @@ def get_download_text() -> str:
     for msg in st.session_state.messages:
         label = label_map.get(msg["role"], msg["role"].upper())
         lines.append(f"[{label}]\n{msg['content']}\n")
+
+    if st.session_state.debate_summary:
+        lines.append("\n" + "="*40)
+        lines.append("[ÖĞRENME ÖZETİ]")
+        lines.append(st.session_state.debate_summary)
+
     return "\n".join(lines)
 
 
@@ -192,6 +207,17 @@ with st.sidebar:
 *Hackathon 2026 · BTK Akademi × Google × GİRVAK*
 """)
 
+    # Tartışma başlamadan tur ayarı
+    if st.session_state.orchestrator is None and not st.session_state.demo_mode:
+        st.divider()
+        st.session_state.max_rounds = st.slider(
+            "Tartışma turu sayısı",
+            min_value=3,
+            max_value=8,
+            value=st.session_state.max_rounds,
+            help="Daha fazla tur = daha derin tartışma, daha fazla API çağrısı",
+        )
+
     # Aktif tartışma araçları
     if st.session_state.orchestrator or st.session_state.demo_mode:
         st.divider()
@@ -199,8 +225,9 @@ with st.sidebar:
         if st.session_state.orchestrator:
             orch = st.session_state.orchestrator
             st.caption(f"**Tur:** {orch.current_round} / {orch.max_rounds}")
+            progress = orch.current_round / orch.max_rounds
+            st.progress(progress)
 
-        # FIX 6: İndir butonu
         if st.session_state.messages:
             raw_name = st.session_state.current_topic or "tartisma"
             safe_name = (
@@ -216,12 +243,11 @@ with st.sidebar:
                 use_container_width=True,
             )
 
-        # FIX 4: Sıfırla butonu
         if st.button("🔄 Yeni konu başlat", use_container_width=True):
             reset_session(save_to_history=True)
             st.rerun()
 
-    # FIX 5: Geçmiş tartışmalar
+    # Geçmiş tartışmalar
     if st.session_state.history:
         st.divider()
         st.subheader("📚 Geçmiş Tartışmalar")
@@ -241,8 +267,13 @@ with st.sidebar:
 for msg in st.session_state.messages:
     show_message(msg["role"], msg["content"])
 
+# Özet göster
+if st.session_state.debate_summary:
+    with st.expander("📋 Öğrenme Özeti", expanded=True):
+        st.markdown(st.session_state.debate_summary)
 
-# ===== FIX 7: DEMO MODU =====
+
+# ===== DEMO MODU =====
 is_idle = (
     st.session_state.orchestrator is None
     and not st.session_state.demo_mode
@@ -279,7 +310,10 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
         add_message("user", f"📚 **Konu:** {topic}")
         show_message("user", f"📚 **Konu:** {topic}")
 
-        st.session_state.orchestrator = DebateOrchestrator(topic, max_rounds=5)
+        st.session_state.orchestrator = DebateOrchestrator(
+            topic,
+            max_rounds=st.session_state.max_rounds,
+        )
 
         placeholder = st.empty()
         state = StreamState()
@@ -293,7 +327,7 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
         def on_complete_open(role: str, message: str) -> None:
             placeholder.empty()
             add_message("professor", state.full_response)
-            show_message("professor", state.full_response)
+            # fix: show_message kaldırıldı — st.rerun() mesajı history'den render eder
 
         with st.spinner("Profesör açıklıyor..."):
             success = st.session_state.orchestrator.start_debate(
@@ -325,7 +359,6 @@ elif (
             prof_ph = st.empty()
             state = StreamState()
 
-            # FIX 3: chunk'lar sadece biriktirir; kayıt on_complete'de yapılır
             def on_chunk_skip(role: str, chunk: str) -> None:
                 if role == "student":
                     state.student_response += chunk
@@ -339,17 +372,15 @@ elif (
                             st.markdown(f"**Profesör Gültekin**\n\n{state.prof_response}▌")
 
             def on_complete_skip(role: str, message: str) -> None:
-                # FIX 3: mesaj kayıt garantisi burada, yarış koşulu yok
+                # fix: show_message kaldırıldı — çift render önlendi
                 if role == "student":
                     student_ph.empty()
                     add_message("student", state.student_response)
-                    show_message("student", state.student_response)
                 elif role == "professor":
                     prof_ph.empty()
                     add_message("professor", state.prof_response)
-                    show_message("professor", state.prof_response)
 
-            with st.spinner("Kamil soruyor..."):
+            with st.spinner("Kamil ve Profesör konuşuyor..."):
                 success = st.session_state.orchestrator.user_skip_turn(
                     on_chunk_skip, on_complete_skip
                 )
@@ -392,7 +423,7 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
         def on_complete_q(role: str, message: str) -> None:
             placeholder.empty()
             add_message("professor", state.full_response)
-            show_message("professor", state.full_response)
+            # fix: show_message kaldırıldı
 
         with st.spinner("Profesör cevaplıyor..."):
             success = st.session_state.orchestrator.user_ask_question(
@@ -417,8 +448,17 @@ elif (
     and st.session_state.orchestrator is not None
     and st.session_state.orchestrator.is_finished
 ):
+    # Özet henüz üretilmediyse üret
+    if st.session_state.debate_summary is None and st.session_state.orchestrator.summary is None:
+        with st.spinner("📋 Öğrenme özeti hazırlanıyor..."):
+            summary = st.session_state.orchestrator.generate_summary()
+            if summary:
+                st.session_state.debate_summary = summary
+                st.rerun()
+
     st.divider()
     st.success("✅ Tartışma tamamlandı! Yeni bir konu başlatabilirsiniz.")
+
     if st.button("🔄 Yeni konu başlat", use_container_width=True):
         reset_session(save_to_history=True)
         st.rerun()

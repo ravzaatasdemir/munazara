@@ -11,7 +11,7 @@ from agents.exceptions import APIQuotaError, APIConnectionError, APIKeyError, Em
 
 load_dotenv()
 
-MODEL = "gemini-2.5-flash"
+MODEL = "gemini-2.0-flash"  # fix: "gemini-2.5-flash" geçersiz model adıydı
 _client = None
 
 

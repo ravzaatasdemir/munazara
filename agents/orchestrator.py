@@ -1,11 +1,18 @@
 ﻿"""
-Münazara — Orchestrator
+Münazara — Orchestrator (v2: shared history)
+
+Değişiklikler:
+- prof_history + student_history → tek shared_history
+  Her ajan tüm konuşmayı görür; kendi mesajları "model", diğerleri "user" olarak iletilir.
+- Ardışık aynı-role mesajları otomatik birleştirilir (Gemini API gereksinimi).
+- _pending_context kaldırıldı: öğrenci zaten tam geçmişi gördüğünden gereksiz.
+- generate_summary(): tartışma bitince öğrenme özeti üretir.
 """
 
 from __future__ import annotations
 from typing import Callable, Optional
-from agents.gemini_client import chat_stream
-from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
+from agents.gemini_client import chat, chat_stream
+from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, SUMMARY_PROMPT, get_opening_prompt
 from agents.exceptions import MunazaraError
 
 PROF_TEMP: float = 0.3
@@ -20,14 +27,23 @@ class DebateOrchestrator:
         self.topic: str = topic
         self.max_rounds: int = max_rounds
         self.current_round: int = 0
-        self.prof_history: list[dict[str, str]] = []
-        self.student_history: list[dict[str, str]] = []
+
+        # Ortak geçmiş: her mesaj {"speaker": str, "content": str}
+        # speaker değerleri: "professor" | "student" | "system" | "user_question"
+        self.shared_history: list[dict[str, str]] = []
+
+        # UI için ayrı liste: {"role": str, "content": str}
         self.messages: list[dict[str, str]] = []
+
         self.is_started: bool = False
         self.is_finished: bool = False
         self.waiting_for_user: bool = False
         self.last_error: Optional[str] = None
-        self._pending_context: Optional[str] = None
+        self.summary: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # PUBLIC API
+    # ------------------------------------------------------------------
 
     def start_debate(
         self,
@@ -35,7 +51,7 @@ class DebateOrchestrator:
         on_complete: CompleteCallback = None,
     ) -> bool:
         opening = get_opening_prompt(self.topic)
-        self.prof_history.append({"role": "user", "content": opening})
+        self.shared_history.append({"speaker": "system", "content": opening})
         try:
             success = self._professor_speaks(on_chunk, on_complete)
             if success:
@@ -55,13 +71,9 @@ class DebateOrchestrator:
         if not self.waiting_for_user:
             return False
         try:
-            prof_last = self.prof_history[-1]["content"]
-            if not self._student_speaks(prof_last, on_chunk, on_complete):
+            if not self._student_speaks(on_chunk, on_complete):
                 self.is_finished = True
                 return False
-
-            student_last = self.student_history[-1]["content"]
-            self.prof_history.append({"role": "user", "content": student_last})
 
             if not self._professor_speaks(on_chunk, on_complete):
                 self.is_finished = True
@@ -88,26 +100,17 @@ class DebateOrchestrator:
 
         question = self._sanitize_input(question)
         context = (
-            f"[Tartışma sırasında başka bir öğrenci '{question}' diye sordu]\n\n"
-            f"Bu soruyu yanıtla."
+            f"[Tartışmayı izleyen bir kullanıcı sana şunu sordu: '{question}']\n\n"
+            f"Bu soruyu doğrudan yanıtla, ardından Kamil ile tartışmaya geri dön."
         )
-        self.prof_history.append({"role": "user", "content": context})
+        self.shared_history.append({"speaker": "user_question", "content": context})
+
         try:
             if not self._professor_speaks(on_chunk, on_complete):
                 self.is_finished = True
                 self.waiting_for_user = False
                 return False
 
-            prof_response = self.prof_history[-1]["content"]
-            new_entry = (
-                f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
-                f"Profesör ona da açıkladı: '{prof_response[:120]}...']"
-            )
-            # Birden fazla üst üste soru gelirse bağlamı biriktir, ezme
-            if self._pending_context:
-                self._pending_context = self._pending_context + "\n" + new_entry
-            else:
-                self._pending_context = new_entry
             self.current_round += 1
             if self.current_round >= self.max_rounds:
                 self.is_finished = True
@@ -119,18 +122,72 @@ class DebateOrchestrator:
             self.waiting_for_user = False
             return False
 
+    def generate_summary(self) -> Optional[str]:
+        """
+        Tartışma bitince öğrenme özeti üretir.
+        Sadece professor ve student mesajlarını kullanır.
+        """
+        lines = []
+        for msg in self.messages:
+            if msg["role"] in ("professor", "student"):
+                label = "PROFESÖR" if msg["role"] == "professor" else "KAMİL"
+                lines.append(f"[{label}]: {msg['content']}")
+
+        if not lines:
+            return None
+
+        transcript = "\n\n".join(lines)
+        try:
+            result = chat(
+                system_prompt=SUMMARY_PROMPT,
+                history=[{"role": "user", "content": f"Tartışma transkripi:\n\n{transcript}"}],
+                temperature=0.3,
+                max_tokens=400,
+            )
+            self.summary = result
+            return result
+        except Exception:
+            return None
+
     # ------------------------------------------------------------------
     # İÇ METODLAR
     # ------------------------------------------------------------------
+
+    def _build_history_for(self, agent: str) -> list[dict[str, str]]:
+        """
+        Shared history'yi belirtilen ajan perspektifine çevirir:
+          - Ajanın kendi mesajları  → role: "model"
+          - Diğer tüm mesajlar     → role: "user"
+
+        Gemini API ardışık aynı role'e izin vermediğinden,
+        yan yana gelen aynı-role mesajlar içerik birleştirilerek tek mesaja indirilir.
+        """
+        raw: list[dict[str, str]] = []
+        for msg in self.shared_history:
+            role = "model" if msg["speaker"] == agent else "user"
+            raw.append({"role": role, "content": msg["content"]})
+
+        # Ardışık aynı-role mesajları birleştir
+        merged: list[dict[str, str]] = []
+        for item in raw:
+            if merged and merged[-1]["role"] == item["role"]:
+                merged[-1] = {
+                    "role": merged[-1]["role"],
+                    "content": merged[-1]["content"] + "\n\n" + item["content"],
+                }
+            else:
+                merged.append(dict(item))
+        return merged
 
     def _professor_speaks(
         self,
         on_chunk: ChunkCallback = None,
         on_complete: CompleteCallback = None,
     ) -> bool:
-        """Profesörü konuştur. Başarılı ise True döner."""  # fix 2: tutarlı bool
+        history = self._build_history_for("professor")
         full_response: str = ""
-        for chunk in chat_stream(PROFESSOR_PROMPT, self.prof_history, PROF_TEMP):
+
+        for chunk in chat_stream(PROFESSOR_PROMPT, history, PROF_TEMP):
             if chunk is None:
                 return False
             full_response += chunk
@@ -141,7 +198,7 @@ class DebateOrchestrator:
         if not full_response:
             return False
 
-        self.prof_history.append({"role": "model", "content": full_response})
+        self.shared_history.append({"speaker": "professor", "content": full_response})
         self.messages.append({"role": "professor", "content": full_response})
         if on_complete:
             on_complete("professor", full_response)
@@ -149,11 +206,9 @@ class DebateOrchestrator:
 
     def _student_speaks(
         self,
-        prof_last_message: str,
         on_chunk: ChunkCallback = None,
         on_complete: CompleteCallback = None,
     ) -> bool:
-        """Öğrenciyi konuştur. Başarılı ise True döner."""  # fix 2: tutarlı bool
         if self.current_round < 2:
             level = "yüzeysel"
         elif self.current_round < 4:
@@ -161,15 +216,20 @@ class DebateOrchestrator:
         else:
             level = "derin"
 
-        context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyesi: {level}]"
-        if self._pending_context:
-            context += f"\n{self._pending_context}"
-            self._pending_context = None
-        context += f"\n\n{prof_last_message}"
+        history = self._build_history_for("student")
 
-        self.student_history.append({"role": "user", "content": context})
+        # Tur bağlamını son mesaja ekle — shared_history'yi kirletmez
+        round_ctx = f"[Tur {self.current_round}/{self.max_rounds} — soru derinliği: {level}]"
+        if history:
+            history[-1] = {
+                "role": history[-1]["role"],
+                "content": round_ctx + "\n\n" + history[-1]["content"],
+            }
+        else:
+            history.append({"role": "user", "content": round_ctx})
+
         full_response: str = ""
-        for chunk in chat_stream(STUDENT_PROMPT, self.student_history, STUDENT_TEMP):
+        for chunk in chat_stream(STUDENT_PROMPT, history, STUDENT_TEMP):
             if chunk is None:
                 return False
             full_response += chunk
@@ -180,7 +240,7 @@ class DebateOrchestrator:
         if not full_response:
             return False
 
-        self.student_history.append({"role": "model", "content": full_response})
+        self.shared_history.append({"speaker": "student", "content": full_response})
         self.messages.append({"role": "student", "content": full_response})
         if on_complete:
             on_complete("student", full_response)
