@@ -7,7 +7,6 @@ from typing import Callable, Optional
 from agents.gemini_client import chat_stream
 from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, get_opening_prompt
 from agents.exceptions import MunazaraError
-import time
 
 PROF_TEMP: float = 0.3
 STUDENT_TEMP: float = 0.7
@@ -28,9 +27,8 @@ class DebateOrchestrator:
         self.is_finished: bool = False
         self.waiting_for_user: bool = False
         self.last_error: Optional[str] = None
-        # Kullanıcı müdahalesi bilgisi — sonraki tura enjekte edilecek
         self._pending_context: Optional[str] = None
-    
+
     def start_debate(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         opening = get_opening_prompt(self.topic)
         self.prof_history.append({"role": "user", "content": opening})
@@ -44,7 +42,7 @@ class DebateOrchestrator:
         except MunazaraError as e:
             self.last_error = str(e)
             return False
-    
+
     def user_skip_turn(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         if not self.waiting_for_user:
             return False
@@ -69,7 +67,7 @@ class DebateOrchestrator:
             self.last_error = str(e)
             self.is_finished = True
             return False
-    
+
     def user_ask_question(self, question: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> bool:
         if not self.waiting_for_user:
             return False
@@ -79,7 +77,6 @@ class DebateOrchestrator:
         try:
             success = self._professor_speaks(on_chunk, on_complete)
             if success:
-                # History'e ekleme! Pending context olarak sakla
                 prof_response = self.prof_history[-1]["content"]
                 self._pending_context = (
                     f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
@@ -98,18 +95,15 @@ class DebateOrchestrator:
             self.is_finished = True
             self.waiting_for_user = False
             return False
-    
+
     def _professor_speaks(self, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
         full_response: str = ""
         for chunk in chat_stream(PROFESSOR_PROMPT, self.prof_history, PROF_TEMP):
             if chunk is None:
                 return False
-            words = chunk.split(' ')
-            for word in words:
-                full_response += word + ' '
-                if on_chunk:
-                    on_chunk("professor", word + ' ')
-                time.sleep(0.05)
+            full_response += chunk
+            if on_chunk:
+                on_chunk("professor", chunk)
         full_response = full_response.strip()
         if not full_response:
             return False
@@ -118,7 +112,7 @@ class DebateOrchestrator:
         if on_complete:
             on_complete("professor", full_response)
         return full_response
-    
+
     def _student_speaks(self, prof_last_message: str, on_chunk: ChunkCallback = None, on_complete: CompleteCallback = None) -> str | bool:
         if self.current_round < 2:
             level = "yüzeysel"
@@ -126,25 +120,21 @@ class DebateOrchestrator:
             level = "orta"
         else:
             level = "derin"
-        
-        # Pending context varsa user mesajına birleştir
+
         context = f"[Tur {self.current_round}/{self.max_rounds}. Soru seviyen: {level}]"
         if self._pending_context:
             context += f"\n{self._pending_context}"
-            self._pending_context = None  # Kullanıldı, temizle
+            self._pending_context = None
         context += f"\n\n{prof_last_message}"
-        
+
         self.student_history.append({"role": "user", "content": context})
         full_response: str = ""
         for chunk in chat_stream(STUDENT_PROMPT, self.student_history, STUDENT_TEMP):
             if chunk is None:
                 return False
-            words = chunk.split(' ')
-            for word in words:
-                full_response += word + ' '
-                if on_chunk:
-                    on_chunk("student", word + ' ')
-                time.sleep(0.05)
+            full_response += chunk
+            if on_chunk:
+                on_chunk("student", chunk)
         full_response = full_response.strip()
         if not full_response:
             return False
@@ -153,7 +143,7 @@ class DebateOrchestrator:
         if on_complete:
             on_complete("student", full_response)
         return full_response
-    
+
     def _sanitize_input(self, text: str) -> str:
         """Prompt injection koruması"""
         dangerous_patterns: list[str] = [
