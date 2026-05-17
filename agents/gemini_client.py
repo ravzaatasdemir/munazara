@@ -4,6 +4,7 @@ Münazara — Gemini API Wrapper
 
 import os
 import time
+import threading
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
@@ -11,27 +12,29 @@ from agents.exceptions import APIQuotaError, APIConnectionError, APIKeyError, Em
 
 load_dotenv()
 
-MODEL = "gemini-2.0-flash"  # fix: "gemini-2.5-flash" geçersiz model adıydı
+MODEL = "gemini-2.0-flash"
 _client = None
+_client_lock = threading.Lock()  # FIX 1: Thread-safe client oluşturma
 
 
 def _get_client():
-    """Client'ı ilk kullanımda oluştur (lazy loading)"""
+    """Client'ı ilk kullanımda oluştur (lazy loading, thread-safe)."""
     global _client
-    if _client is None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        
-        if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
-            try:
-                import streamlit as st
-                api_key = st.secrets.get("GEMINI_API_KEY", None)
-            except Exception:
-                pass
-        
-        if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
-            raise APIKeyError()
-        
-        _client = genai.Client(api_key=api_key)
+    with _client_lock:
+        if _client is None:
+            api_key = os.getenv("GEMINI_API_KEY")
+
+            if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
+                try:
+                    import streamlit as st
+                    api_key = st.secrets.get("GEMINI_API_KEY", None)
+                except Exception:
+                    pass
+
+            if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
+                raise APIKeyError()
+
+            _client = genai.Client(api_key=api_key)
     return _client
 
 
@@ -74,8 +77,7 @@ def chat(
             if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                 raise APIQuotaError()
             if attempt < 2:
-                wait = 2 ** attempt
-                time.sleep(wait)
+                time.sleep(2 ** attempt)
             else:
                 raise APIConnectionError(error_msg)
 

@@ -1,17 +1,17 @@
 ﻿"""
-Münazara — Orchestrator (v2: shared history)
+Münazara — Orchestrator (v4)
 
-Değişiklikler:
-- prof_history + student_history → tek shared_history
-  Her ajan tüm konuşmayı görür; kendi mesajları "model", diğerleri "user" olarak iletilir.
-- Ardışık aynı-role mesajları otomatik birleştirilir (Gemini API gereksinimi).
-- _pending_context kaldırıldı: öğrenci zaten tam geçmişi gördüğünden gereksiz.
-- generate_summary(): tartışma bitince öğrenme özeti üretir.
+Değişiklikler v3 → v4:
+- dict[str, str] yerine Message ve HistoryEntry dataclass'ları kullanılıyor.
+  self.messages: list[Message]
+  self.shared_history: list[HistoryEntry]
+  Erişim artık msg["role"] değil, msg.role şeklinde.
 """
 
 from __future__ import annotations
 from typing import Callable, Optional
-from agents.gemini_client import chat, chat_stream
+from agents.gemini_client import chat_stream
+from agents.models import Message, HistoryEntry
 from agents.personas import PROFESSOR_PROMPT, STUDENT_PROMPT, SUMMARY_PROMPT, get_opening_prompt
 from agents.exceptions import MunazaraError
 
@@ -27,13 +27,10 @@ class DebateOrchestrator:
         self.topic: str = topic
         self.max_rounds: int = max_rounds
         self.current_round: int = 0
+        self.user_question_count: int = 0
 
-        # Ortak geçmiş: her mesaj {"speaker": str, "content": str}
-        # speaker değerleri: "professor" | "student" | "system" | "user_question"
-        self.shared_history: list[dict[str, str]] = []
-
-        # UI için ayrı liste: {"role": str, "content": str}
-        self.messages: list[dict[str, str]] = []
+        self.shared_history: list[HistoryEntry] = []
+        self.messages: list[Message] = []
 
         self.is_started: bool = False
         self.is_finished: bool = False
@@ -52,7 +49,7 @@ class DebateOrchestrator:
         on_complete: CompleteCallback = None,
     ) -> bool:
         opening = get_opening_prompt(self.topic)
-        self.shared_history.append({"speaker": "system", "content": opening})
+        self.shared_history.append(HistoryEntry(speaker="system", content=opening))
         try:
             success = self._professor_speaks(on_chunk, on_complete)
             if success:
@@ -114,7 +111,7 @@ class DebateOrchestrator:
             f"[Tartışmayı izleyen bir kullanıcı sana şunu sordu: '{question}']\n\n"
             f"Bu soruyu doğrudan yanıtla, ardından Kamil ile tartışmaya geri dön."
         )
-        self.shared_history.append({"speaker": "user_question", "content": context})
+        self.shared_history.append(HistoryEntry(speaker="user_question", content=context))
 
         try:
             if not self._professor_speaks(on_chunk, on_complete):
@@ -122,7 +119,8 @@ class DebateOrchestrator:
                 self.waiting_for_user = False
                 return False
 
-            self.current_round += 1
+            self.user_question_count += 1
+
             if self.current_round >= self.max_rounds:
                 self.is_finished = True
                 self.waiting_for_user = False
@@ -138,31 +136,36 @@ class DebateOrchestrator:
             self.waiting_for_user = False
             return False
 
-    def generate_summary(self) -> Optional[str]:
-        """
-        Tartışma bitince öğrenme özeti üretir.
-        Sadece professor ve student mesajlarını kullanır.
-        """
+    def generate_summary(
+        self,
+        on_chunk: ChunkCallback = None,
+    ) -> Optional[str]:
         lines = []
         for msg in self.messages:
-            if msg["role"] in ("professor", "student"):
-                label = "PROFESÖR" if msg["role"] == "professor" else "KAMİL"
-                lines.append(f"[{label}]: {msg['content']}")
+            if msg.role in ("professor", "student"):
+                label = "PROFESÖR" if msg.role == "professor" else "KAMİL"
+                lines.append(f"[{label}]: {msg.content}")
 
         if not lines:
             return None
 
         transcript = "\n\n".join(lines)
+        full_response = ""
+
         try:
-            result = chat(
+            for chunk in chat_stream(
                 system_prompt=SUMMARY_PROMPT,
                 history=[{"role": "user", "content": f"Tartışma transkripi:\n\n{transcript}"}],
                 temperature=0.3,
                 max_tokens=400,
-            )
-            self.summary = result
+            ):
+                full_response += chunk
+                if on_chunk:
+                    on_chunk("summary", chunk)
+
+            self.summary = full_response.strip()
             self.summary_error = None
-            return result
+            return self.summary
         except Exception as e:
             self.summary_error = str(e)
             return None
@@ -173,19 +176,15 @@ class DebateOrchestrator:
 
     def _build_history_for(self, agent: str) -> list[dict[str, str]]:
         """
-        Shared history'yi belirtilen ajan perspektifine çevirir:
-          - Ajanın kendi mesajları  → role: "model"
-          - Diğer tüm mesajlar     → role: "user"
-
-        Gemini API ardışık aynı role'e izin vermediğinden,
-        yan yana gelen aynı-role mesajlar içerik birleştirilerek tek mesaja indirilir.
+        Shared history'yi Gemini API formatına çevirir (dict listesi).
+        Ajanın kendi mesajları → 'model', diğerleri → 'user'.
+        Ardışık aynı-role mesajlar birleştirilir.
         """
         raw: list[dict[str, str]] = []
-        for msg in self.shared_history:
-            role = "model" if msg["speaker"] == agent else "user"
-            raw.append({"role": role, "content": msg["content"]})
+        for entry in self.shared_history:
+            role = "model" if entry.speaker == agent else "user"
+            raw.append({"role": role, "content": entry.content})
 
-        # Ardışık aynı-role mesajları birleştir
         merged: list[dict[str, str]] = []
         for item in raw:
             if merged and merged[-1]["role"] == item["role"]:
@@ -216,8 +215,8 @@ class DebateOrchestrator:
         if not full_response:
             return False
 
-        self.shared_history.append({"speaker": "professor", "content": full_response})
-        self.messages.append({"role": "professor", "content": full_response})
+        self.shared_history.append(HistoryEntry(speaker="professor", content=full_response))
+        self.messages.append(Message(role="professor", content=full_response))
         if on_complete:
             on_complete("professor", full_response)
         return True
@@ -235,8 +234,6 @@ class DebateOrchestrator:
             level = "derin"
 
         history = self._build_history_for("student")
-
-        # Tur bağlamını son mesaja ekle — shared_history'yi kirletmez
         round_ctx = f"[Tur {self.current_round}/{self.max_rounds} — soru derinliği: {level}]"
         if history:
             history[-1] = {
@@ -258,14 +255,13 @@ class DebateOrchestrator:
         if not full_response:
             return False
 
-        self.shared_history.append({"speaker": "student", "content": full_response})
-        self.messages.append({"role": "student", "content": full_response})
+        self.shared_history.append(HistoryEntry(speaker="student", content=full_response))
+        self.messages.append(Message(role="student", content=full_response))
         if on_complete:
             on_complete("student", full_response)
         return True
 
     def _sanitize_input(self, text: str) -> str:
-        """Prompt injection koruması."""
         dangerous_patterns: list[str] = [
             "talimatları unut", "ignore instructions", "ignore previous",
             "sistem promptunu", "system prompt", "karakterinden çık",

@@ -21,3 +21,7 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+
+hf-munazara/
+.coverage
+htmlcov/
