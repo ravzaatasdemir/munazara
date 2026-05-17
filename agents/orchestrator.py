@@ -99,10 +99,15 @@ class DebateOrchestrator:
                 return False
 
             prof_response = self.prof_history[-1]["content"]
-            self._pending_context = (
+            new_entry = (
                 f"[Az önce başka bir öğrenci (kullanıcı) '{question}' diye sordu, "
                 f"Profesör ona da açıkladı: '{prof_response[:120]}...']"
             )
+            # Birden fazla üst üste soru gelirse bağlamı biriktir, ezme
+            if self._pending_context:
+                self._pending_context = self._pending_context + "\n" + new_entry
+            else:
+                self._pending_context = new_entry
             self.current_round += 1
             if self.current_round >= self.max_rounds:
                 self.is_finished = True
