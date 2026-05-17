@@ -325,16 +325,18 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
                     st.markdown(f"**Profesör Gültekin**\n\n{state.full_response}▌")
 
         def on_complete_open(role: str, message: str) -> None:
-            placeholder.empty()
-            add_message("professor", state.full_response)
-            # fix: show_message kaldırıldı — st.rerun() mesajı history'den render eder
+            placeholder.empty()  # sadece placeholder temizle, state yazma yok
 
         try:
             with st.spinner("Profesör açıklıyor..."):
                 success = st.session_state.orchestrator.start_debate(
                     on_chunk_open, on_complete_open
                 )
-            if not success:
+            # State yazımı spinner bittikten sonra, rerun öncesinde — güvenli bölge
+            if success:
+                prof_msg = st.session_state.orchestrator.messages[-1]["content"]
+                add_message("professor", prof_msg)
+            else:
                 err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
                 add_message("system", f"❌ {err}")
         except Exception as e:
@@ -377,20 +379,25 @@ elif (
                             st.markdown(f"**Profesör Gültekin**\n\n{state.prof_response}▌")
 
             def on_complete_skip(role: str, message: str) -> None:
-                # fix: show_message kaldırıldı — çift render önlendi
+                # sadece placeholder temizle, state yazma yok
                 if role == "student":
                     student_ph.empty()
-                    add_message("student", state.student_response)
                 elif role == "professor":
                     prof_ph.empty()
-                    add_message("professor", state.prof_response)
 
             try:
                 with st.spinner("Kamil ve Profesör konuşuyor..."):
                     success = st.session_state.orchestrator.user_skip_turn(
                         on_chunk_skip, on_complete_skip
                     )
-                if not success:
+                # State yazımı spinner bittikten sonra — güvenli bölge
+                if success:
+                    orch_msgs = st.session_state.orchestrator.messages
+                    # Son iki mesaj: student sonra professor (user_skip_turn sırası)
+                    new_msgs = orch_msgs[len(st.session_state.messages):]
+                    for m in new_msgs:
+                        add_message(m["role"], m["content"])
+                else:
                     err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
                     add_message("system", f"❌ {err}")
                 if st.session_state.orchestrator.is_finished:
@@ -431,16 +438,21 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
                     st.markdown(f"**Profesör Gültekin**\n\n{state.full_response}▌")
 
         def on_complete_q(role: str, message: str) -> None:
-            placeholder.empty()
-            add_message("professor", state.full_response)
-            # fix: show_message kaldırıldı
+            placeholder.empty()  # sadece placeholder temizle
 
         try:
             with st.spinner("Profesör cevaplıyor..."):
                 success = st.session_state.orchestrator.user_ask_question(
                     user_question, on_chunk_q, on_complete_q
                 )
-            if not success:
+            # State yazımı spinner bittikten sonra — güvenli bölge
+            if success:
+                new_msgs = st.session_state.orchestrator.messages[len(st.session_state.messages) - 1:]
+                for m in new_msgs:
+                    if m["role"] == "professor":
+                        add_message("professor", m["content"])
+                        break
+            else:
                 err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
                 add_message("system", f"❌ {err}")
         except Exception as e:
@@ -470,8 +482,23 @@ elif (
             if summary:
                 st.session_state.debate_summary = summary
                 st.rerun()
+            else:
+                err = getattr(st.session_state.orchestrator, "summary_error", None)
+                if err:
+                    st.session_state.debate_summary = f"__HATA__{err}"
+                else:
+                    st.session_state.debate_summary = "__HATA__Tartışma verisi boş."
 
     st.divider()
+
+    # Özeti göster — hata ve başarı durumları ayrı
+    if st.session_state.debate_summary and st.session_state.debate_summary.startswith("__HATA__"):
+        hata_detay = st.session_state.debate_summary.replace("__HATA__", "")
+        st.warning(f"📋 Öğrenme özeti üretilemedi: {hata_detay}")
+    elif st.session_state.debate_summary:
+        with st.expander("📋 Öğrenme Özeti", expanded=True):
+            st.markdown(st.session_state.debate_summary)
+
     st.success("✅ Tartışma tamamlandı! Yeni bir konu başlatabilirsiniz.")
 
     if st.button("🔄 Yeni konu başlat", use_container_width=True):

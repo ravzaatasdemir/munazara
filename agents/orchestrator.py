@@ -40,6 +40,7 @@ class DebateOrchestrator:
         self.waiting_for_user: bool = False
         self.last_error: Optional[str] = None
         self.summary: Optional[str] = None
+        self.summary_error: Optional[str] = None
 
     # ------------------------------------------------------------------
     # PUBLIC API
@@ -160,8 +161,10 @@ class DebateOrchestrator:
                 max_tokens=400,
             )
             self.summary = result
+            self.summary_error = None
             return result
-        except Exception:
+        except Exception as e:
+            self.summary_error = str(e)
             return None
 
     # ------------------------------------------------------------------
