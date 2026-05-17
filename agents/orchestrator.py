@@ -61,6 +61,11 @@ class DebateOrchestrator:
             return success
         except MunazaraError as e:
             self.last_error = str(e)
+            self.is_finished = True
+            return False
+        except Exception as e:
+            self.last_error = f"Beklenmeyen hata: {e}"
+            self.is_finished = True
             return False
 
     def user_skip_turn(
@@ -87,6 +92,11 @@ class DebateOrchestrator:
         except MunazaraError as e:
             self.last_error = str(e)
             self.is_finished = True
+            return False
+        except Exception as e:
+            self.last_error = f"Beklenmeyen hata: {e}"
+            self.is_finished = True
+            self.waiting_for_user = False
             return False
 
     def user_ask_question(
@@ -118,6 +128,11 @@ class DebateOrchestrator:
             return True
         except MunazaraError as e:
             self.last_error = str(e)
+            self.is_finished = True
+            self.waiting_for_user = False
+            return False
+        except Exception as e:
+            self.last_error = f"Beklenmeyen hata: {e}"
             self.is_finished = True
             self.waiting_for_user = False
             return False

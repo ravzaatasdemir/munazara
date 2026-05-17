@@ -329,14 +329,19 @@ if st.session_state.orchestrator is None and not st.session_state.demo_mode:
             add_message("professor", state.full_response)
             # fix: show_message kaldırıldı — st.rerun() mesajı history'den render eder
 
-        with st.spinner("Profesör açıklıyor..."):
-            success = st.session_state.orchestrator.start_debate(
-                on_chunk_open, on_complete_open
-            )
-
-        if not success:
-            err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
-            add_message("system", f"❌ {err}")
+        try:
+            with st.spinner("Profesör açıklıyor..."):
+                success = st.session_state.orchestrator.start_debate(
+                    on_chunk_open, on_complete_open
+                )
+            if not success:
+                err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                add_message("system", f"❌ {err}")
+        except Exception as e:
+            placeholder.empty()
+            add_message("system", f"❌ Beklenmeyen hata: {e}")
+            st.session_state.orchestrator.is_finished = True
+            st.session_state.orchestrator.waiting_for_user = False
 
         st.rerun()
 
@@ -380,17 +385,22 @@ elif (
                     prof_ph.empty()
                     add_message("professor", state.prof_response)
 
-            with st.spinner("Kamil ve Profesör konuşuyor..."):
-                success = st.session_state.orchestrator.user_skip_turn(
-                    on_chunk_skip, on_complete_skip
-                )
-
-            if not success:
-                err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
-                add_message("system", f"❌ {err}")
-
-            if st.session_state.orchestrator.is_finished:
-                add_message("system", "✅ Tartışma tamamlandı!")
+            try:
+                with st.spinner("Kamil ve Profesör konuşuyor..."):
+                    success = st.session_state.orchestrator.user_skip_turn(
+                        on_chunk_skip, on_complete_skip
+                    )
+                if not success:
+                    err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                    add_message("system", f"❌ {err}")
+                if st.session_state.orchestrator.is_finished:
+                    add_message("system", "✅ Tartışma tamamlandı!")
+            except Exception as e:
+                student_ph.empty()
+                prof_ph.empty()
+                add_message("system", f"❌ Beklenmeyen hata: {e}")
+                st.session_state.orchestrator.is_finished = True
+                st.session_state.orchestrator.waiting_for_user = False
 
             st.rerun()
 
@@ -425,14 +435,19 @@ elif not st.session_state.demo_mode and st.session_state.user_asking:
             add_message("professor", state.full_response)
             # fix: show_message kaldırıldı
 
-        with st.spinner("Profesör cevaplıyor..."):
-            success = st.session_state.orchestrator.user_ask_question(
-                user_question, on_chunk_q, on_complete_q
-            )
-
-        if not success:
-            err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
-            add_message("system", f"❌ {err}")
+        try:
+            with st.spinner("Profesör cevaplıyor..."):
+                success = st.session_state.orchestrator.user_ask_question(
+                    user_question, on_chunk_q, on_complete_q
+                )
+            if not success:
+                err = st.session_state.orchestrator.last_error or "Bilinmeyen hata"
+                add_message("system", f"❌ {err}")
+        except Exception as e:
+            placeholder.empty()
+            add_message("system", f"❌ Beklenmeyen hata: {e}")
+            st.session_state.orchestrator.is_finished = True
+            st.session_state.orchestrator.waiting_for_user = False
 
         st.session_state.user_asking = False
 
