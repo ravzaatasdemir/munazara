@@ -20,8 +20,17 @@ def _get_client():
     global _client
     if _client is None:
         api_key = os.getenv("GEMINI_API_KEY")
+        
+        if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
+            try:
+                import streamlit as st
+                api_key = st.secrets.get("GEMINI_API_KEY", None)
+            except Exception:
+                pass
+        
         if not api_key or api_key == "buraya_kendi_api_keyinizi_yazin":
             raise APIKeyError()
+        
         _client = genai.Client(api_key=api_key)
     return _client
 
