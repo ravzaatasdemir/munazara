@@ -20,6 +20,7 @@ import uuid
 import threading
 import json
 import sys
+import queue
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -130,17 +131,6 @@ def start_debate(req: StartRequest):
     )
 
     def stream():
-        chunks = []
-
-        def on_chunk(role, chunk):
-            chunks.append((role, chunk))
-
-        def on_complete(role, message):
-            pass
-
-        # Streaming response olarak SSE gönder
-        buffer = []
-
         # Use streaming version
         import queue as q
         chunk_queue = q.Queue()

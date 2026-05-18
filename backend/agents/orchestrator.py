@@ -247,12 +247,14 @@ class DebateOrchestrator:
         history = self._build_history_for("professor")
         full_response: str = ""
 
-        for chunk in chat_stream(PROFESSOR_PROMPT, history, PROF_TEMP):
-            if chunk is None:
-                return False
-            full_response += chunk
+        try:
+            for chunk in chat_stream(PROFESSOR_PROMPT, history, PROF_TEMP):
+                full_response += chunk
             if on_chunk:
                 on_chunk("professor", chunk)
+        except Exception as e:
+            self.last_error = f"Beklenmeyen hata: {e}"
+            return False
 
         full_response = full_response.strip()
         if not full_response:
