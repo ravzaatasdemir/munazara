@@ -2,5 +2,7 @@ google-genai
 python-dotenv
 pyyaml
 streamlit>=1.45.0
+fastapi>=0.111.0
+uvicorn[standard]>=0.30.0
 pytest>=7.0
 pytest-cov>=4.0
