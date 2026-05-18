@@ -4,10 +4,11 @@ Münazara — Ajan Karakter Tanımları
 YAML'dan yüklenir. Prompt düzenlemek için personas.yaml'ı düzenleyin,
 bu dosyaya dokunmaya gerek yok.
 
-FIX v2:
-- Bigram desteği eklendi: "diferansiyel denklem", "vektörel çarpım" gibi
-  çok kelimeli keyword'ler artık doğru eşleşiyor.
-- Tek kelimeli keyword'lerde startswith mantığı korundu (Türkçe ek desteği).
+Düzeltmeler:
+- _SCIENCE_KEYWORDS eklendi: fotosentez, newton vb. demo kavramları artık
+  "generic" yerine "science" route'una düşüyor.
+- get_opening_prompt() science branch'i eklendi.
+- Bigram desteği korundu.
 """
 
 import re
@@ -28,23 +29,22 @@ PROFESSOR_PROMPT: str = _data["professor"]["prompt"].format(max_words=PROF_MAX_W
 STUDENT_PROMPT: str = _data["student"]["prompt"].format(max_words=STUDENT_MAX_WORDS)
 SUMMARY_PROMPT: str = _data["summary"]["prompt"]
 
-# Keyword setleri — tek ve çok kelimeli ayrı tutulur
+# Keyword setleri
 _KW = _data["topic_keywords"]
 _MATH_KEYWORDS: frozenset[str] = frozenset(_KW["math"])
 _HISTORY_KEYWORDS: frozenset[str] = frozenset(_KW["history"])
 _CS_KEYWORDS: frozenset[str] = frozenset(_KW["cs"])
 _ECON_KEYWORDS: frozenset[str] = frozenset(_KW["econ"])
+_SCIENCE_KEYWORDS: frozenset[str] = frozenset(_KW["science"])  # YENİ
 
 
 # ===== Token + Bigram bazlı keyword matching =====
 
 def _tokenize(text: str) -> list[str]:
-    """Metni küçük harfe çevirip kelime tokenlarına ayırır."""
     return re.findall(r"\w+", text.lower())
 
 
 def _make_ngrams(tokens: list[str], n: int) -> list[str]:
-    """tokens listesinden n-gram'lar üretir."""
     return [" ".join(tokens[i : i + n]) for i in range(len(tokens) - n + 1)]
 
 
@@ -53,27 +53,21 @@ def _matches_any(text: str, keywords: frozenset[str]) -> bool:
     Token + bigram bazlı eşleşme.
 
     Tek kelimeli keyword'ler:
-      - Tam eşleşme: 'türev' → 'türev' ✓
-      - Türkçe ek: 'integrali' → 'integral' startswith ✓
-      - False positive koruması: min 4 karakter örtüşme
+      - Tam eşleşme veya startswith (Türkçe ek desteği, min 4 karakter).
 
-    Çok kelimeli keyword'ler (boşluk içerenler):
-      - Bigram eşleşmesi: 'diferansiyel denklem' → ['diferansiyel denklem'] ✓
-      - startswith ile ek toleransı: 'diferansiyel denklemler' ✓
+    Çok kelimeli keyword'ler:
+      - Bigram/trigram eşleşmesi + startswith toleransı.
     """
     tokens = _tokenize(text)
 
-    # Tek kelimeli keyword'ler
     single_kws = {kw for kw in keywords if " " not in kw}
     for token in tokens:
         for kw in single_kws:
             if token == kw:
                 return True
-            # startswith: Türkçe ek desteği, min 4 karakter örtüşme
             if len(kw) >= 4 and token.startswith(kw):
                 return True
 
-    # Çok kelimeli keyword'ler — bigram ve trigram kontrolü
     multi_kws = {kw for kw in keywords if " " in kw}
     if not multi_kws:
         return False
@@ -125,6 +119,16 @@ def get_opening_prompt(topic: str) -> str:
             f"Günlük hayattan somut bir örnek ver — pazar, ekmek fiyatı, döviz. "
             f"Kavramı o örnek üzerinden açıkla. "
             f"Ardından öğrenciye 'peki bu durumda ne olur?' diye sor."
+        )
+
+    # YENİ: Fen bilimleri branch'i
+    if _matches_any(topic, _SCIENCE_KEYWORDS):
+        return (
+            f'Bir öğrencin sana "{topic}" konusunu sordu. '
+            f"Kavramı doğadan veya günlük gözlemden somut bir örnekle başlat — "
+            f"neden yapraklar yeşildir, elma neden düşer gibi. "
+            f"Sezgiden bilimsel açıklamaya adım adım geç. "
+            f"Öğrenciye mekanizmayı kendi sözleriyle ifade ettirmeye çalış."
         )
 
     return (

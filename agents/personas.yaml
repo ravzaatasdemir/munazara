@@ -155,3 +155,36 @@ topic_keywords:
     - döviz kuru
     - stagflasyon
     - fırsat maliyeti
+  # YENİ: Fen bilimleri kategorisi — demo_concepts.md'deki kavramları kapsar
+  science:
+    - fotosentez
+    - newton
+    - evrim
+    - hücre
+    - dna
+    - gen
+    - atom
+    - molekül
+    - enerji
+    - termodinamik
+    - kuantum
+    - görelilik
+    - elektrik
+    - manyetizma
+    - optik
+    - dalga
+    - ses
+    - ışık
+    - yerçekimi
+    - bağışıklık
+    - sinir sistemi
+    - fotosentez
+    - solunum
+    - mitoz
+    - mayoz
+    - ekosistem
+    - doğal seçilim
+    - kimyasal bağ
+    - periyodik tablo
+    - asit
+    - baz

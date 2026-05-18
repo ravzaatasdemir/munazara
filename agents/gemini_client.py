@@ -1,5 +1,13 @@
 """
 Münazara — Gemini API Wrapper
+
+Düzeltmeler:
+- chat_stream() artık chat() ile aynı retry + exponential backoff mantığına sahip.
+  Önceki versiyonda streaming path'inde retry yoktu; tüm orchestrator akışı
+  korumasız bırakılıyordu.
+- Streaming retry'da generator semantiği bozulmaz: hata olursa yeni bir stream
+  açılır, önceki chunk'lar tekrar yield edilmez (caller tarafı placeholder'ı
+  sıfırlamalı — UI zaten spinner kullanıyor, bu kabul edilebilir).
 """
 
 import os
@@ -14,7 +22,9 @@ load_dotenv()
 
 MODEL = "gemini-2.0-flash"
 _client = None
-_client_lock = threading.Lock()  # FIX 1: Thread-safe client oluşturma
+_client_lock = threading.Lock()
+
+MAX_RETRIES = 3
 
 
 def _get_client():
@@ -38,6 +48,28 @@ def _get_client():
     return _client
 
 
+def _build_contents(history: list[dict]) -> list[types.Content]:
+    return [
+        types.Content(
+            role=msg["role"],
+            parts=[types.Part.from_text(text=msg["content"])],
+        )
+        for msg in history
+    ]
+
+
+def _build_config(
+    system_prompt: str,
+    temperature: float,
+    max_tokens: int,
+) -> types.GenerateContentConfig:
+    return types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        temperature=temperature,
+        max_output_tokens=max_tokens,
+    )
+
+
 def chat(
     system_prompt: str,
     history: list[dict],
@@ -45,22 +77,10 @@ def chat(
     max_tokens: int = 1500,
 ):
     """Gemini'a mesaj gönder, cevap al."""
-    contents = []
-    for msg in history:
-        contents.append(
-            types.Content(
-                role=msg["role"],
-                parts=[types.Part.from_text(text=msg["content"])],
-            )
-        )
+    contents = _build_contents(history)
+    config = _build_config(system_prompt, temperature, max_tokens)
 
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-    )
-
-    for attempt in range(3):
+    for attempt in range(MAX_RETRIES):
         try:
             response = _get_client().models.generate_content(
                 model=MODEL,
@@ -76,7 +96,7 @@ def chat(
             error_msg = str(e)
             if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
                 raise APIQuotaError()
-            if attempt < 2:
+            if attempt < MAX_RETRIES - 1:
                 time.sleep(2 ** attempt)
             else:
                 raise APIConnectionError(error_msg)
@@ -88,36 +108,44 @@ def chat_stream(
     temperature: float = 0.7,
     max_tokens: int = 1500,
 ):
-    """Gemini'a mesaj gönder, STREAMING cevap al."""
-    contents = []
-    for msg in history:
-        contents.append(
-            types.Content(
-                role=msg["role"],
-                parts=[types.Part.from_text(text=msg["content"])],
+    """
+    Gemini'a mesaj gönder, STREAMING cevap al.
+
+    Retry mantığı: her denemede yeni bir stream açılır.
+    Kota hatası → hemen yükselt (retry faydasız).
+    Diğer hatalar → exponential backoff ile MAX_RETRIES kez dene.
+    """
+    contents = _build_contents(history)
+    config = _build_config(system_prompt, temperature, max_tokens)
+
+    last_error: Exception | None = None
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            stream = _get_client().models.generate_content_stream(
+                model=MODEL,
+                contents=contents,
+                config=config,
             )
-        )
+            for chunk in stream:
+                if chunk.text:
+                    yield chunk.text
+            return  # başarıyla bitti, döngüden çık
 
-    config = types.GenerateContentConfig(
-        system_instruction=system_prompt,
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-    )
+        except (APIKeyError, EmptyResponseError):
+            raise  # retry yok
 
-    try:
-        stream = _get_client().models.generate_content_stream(
-            model=MODEL,
-            contents=contents,
-            config=config,
-        )
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
-    except Exception as e:
-        error_msg = str(e)
-        if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
-            raise APIQuotaError()
-        raise APIConnectionError(error_msg)
+        except Exception as e:
+            error_msg = str(e)
+            if "RESOURCE_EXHAUSTED" in error_msg or "429" in error_msg:
+                raise APIQuotaError()  # retry yok
+
+            last_error = APIConnectionError(error_msg)
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(2 ** attempt)  # 1s, 2s
+            # son denemeyse döngü bitince raise
+
+    raise last_error
 
 
 if __name__ == "__main__":

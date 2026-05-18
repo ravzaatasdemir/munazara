@@ -1,17 +1,23 @@
 """
-Münazara — Integration Testler (v5)
+Münazara — Integration Testler (v6)
 
-Değişiklikler v4 → v5:
-- TestMaxUserQuestions: soru limiti testleri eklendi.
-- TestTranscriptTrimming: uzun transcript kırpma testi eklendi.
-- TestKeywordMatching: bigram eşleşme testleri eklendi.
-- TestQuestionsRemaining: property testleri eklendi.
+Değişiklikler v5 → v6:
+- TestKeywordMatching: science kategori testleri eklendi.
+  fotosentez ve newton artık science route'una düşmeli.
+- TestScienceRouting: açılış prompt'u route testleri eklendi.
+- Diğer testler değişmedi.
 """
 
 import pytest
 from unittest.mock import patch
 from agents.orchestrator import DebateOrchestrator
-from agents.personas import get_opening_prompt, _matches_any, _MATH_KEYWORDS, _CS_KEYWORDS
+from agents.personas import (
+    get_opening_prompt,
+    _matches_any,
+    _MATH_KEYWORDS,
+    _CS_KEYWORDS,
+    _SCIENCE_KEYWORDS,
+)
 
 
 # ===== Mock helpers =====
@@ -150,7 +156,6 @@ class TestDebateFlow:
         assert not o.waiting_for_user
 
     def test_waiting_for_user_true_between_rounds(self):
-        """FIX: user_skip_turn sonrası waiting_for_user True kalmalı."""
         with _patch_stream(
             prof_responses=["A.", "B."],
             student_responses=["a?"],
@@ -249,8 +254,6 @@ class TestRoundCounting:
 
 
 class TestMaxUserQuestions:
-    """Soru limiti testleri."""
-
     def test_default_max_questions_is_three(self):
         o = DebateOrchestrator("Test")
         assert o.max_user_questions == 3
@@ -277,7 +280,7 @@ class TestMaxUserQuestions:
             o.start_debate()
             o.user_ask_question("Soru 1?")
             o.user_ask_question("Soru 2?")
-            result = o.user_ask_question("Soru 3?")  # limit aşıldı
+            result = o.user_ask_question("Soru 3?")
 
         assert result is False
         assert o.last_error is not None
@@ -296,25 +299,22 @@ class TestMaxUserQuestions:
             o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=1)
             o.start_debate()
             o.user_ask_question("Soru 1?")
-            o.user_ask_question("Soru 2?")  # bloklandı
+            o.user_ask_question("Soru 2?")
 
-        assert o.user_question_count == 1  # sadece ilk soru sayıldı
+        assert o.user_question_count == 1
 
     def test_debate_not_finished_after_limit_reached(self):
-        """Soru limiti dolunca tartışma bitmemeli, sadece soru engellenmeli."""
         with _patch_stream(prof_responses=["A.", "Q1."], student_responses=[]):
             o = DebateOrchestrator("Test", max_rounds=5, max_user_questions=1)
             o.start_debate()
             o.user_ask_question("Soru 1?")
-            o.user_ask_question("Soru 2?")  # bloklandı
+            o.user_ask_question("Soru 2?")
 
         assert not o.is_finished
         assert o.waiting_for_user
 
 
 class TestTranscriptTrimming:
-    """Uzun transcript kırpma testleri."""
-
     def test_short_transcript_not_trimmed(self):
         with _patch_stream(prof_responses=["Kısa açıklama."], student_responses=[]):
             o = DebateOrchestrator("Test", max_rounds=3)
@@ -326,7 +326,6 @@ class TestTranscriptTrimming:
             )
 
         def fake_stream(system_prompt, history, **kwargs):
-            # Transcript'te kısaltma notu olmamalı
             content = history[0]["content"]
             assert "kısaltıldı" not in content
             yield "Özet."
@@ -335,12 +334,10 @@ class TestTranscriptTrimming:
             o.generate_summary()
 
     def test_long_transcript_trimmed(self):
-        """4000 karakteri aşan transcript kırpılmalı."""
         from agents.orchestrator import MAX_TRANSCRIPT_CHARS
         from agents.models import Message
 
         o = DebateOrchestrator("Test", max_rounds=3)
-        # 4000+ karakter olacak şekilde uzun mesajlar ekle
         long_content = "X" * (MAX_TRANSCRIPT_CHARS + 500)
         o.messages.append(Message(role="professor", content=long_content))
         o.messages.append(Message(role="student", content="Kısa soru."))
@@ -355,7 +352,7 @@ class TestTranscriptTrimming:
             o.generate_summary()
 
         assert "kısaltıldı" in captured["content"]
-        assert len(captured["content"]) < MAX_TRANSCRIPT_CHARS + 200  # padding toleransı
+        assert len(captured["content"]) < MAX_TRANSCRIPT_CHARS + 200
 
 
 class TestSummaryStreaming:
@@ -415,8 +412,6 @@ class TestSummaryStreaming:
 
 
 class TestKeywordMatching:
-    """Token + bigram bazlı keyword matching testleri."""
-
     # Mevcut testler
     def test_exact_match(self):
         assert _matches_any("türev nedir", _MATH_KEYWORDS)
@@ -433,26 +428,28 @@ class TestKeywordMatching:
     def test_cs_keyword_with_suffix(self):
         assert _matches_any("handshake'i açıkla", _CS_KEYWORDS)
 
-    # YENİ: Bigram testleri
     def test_bigram_exact_match(self):
-        """'diferansiyel denklem' tam bigram eşleşmesi."""
         assert _matches_any("diferansiyel denklem nedir", _MATH_KEYWORDS)
 
     def test_bigram_with_turkish_suffix(self):
-        """'diferansiyel denklemler' → 'diferansiyel denklem' yakalanmalı."""
         assert _matches_any("diferansiyel denklemler çok zor", _MATH_KEYWORDS)
 
     def test_bigram_no_false_positive(self):
-        """Bigram olmayan 'diferansiyel' tek başına math değil (yaml'da yok)."""
-        # Sadece 'diferansiyel denklem' var; tek 'diferansiyel' yok
-        # Bu test yaml'a bağlı — tek kelimeli 'diferansiyel' eklenmemişse False
         result = _matches_any("diferansiyel hesap", _MATH_KEYWORDS)
-        # "diferansiyel hesap" bir bigram keyword değil → False olmalı
         assert result is False
 
     def test_cs_bigram_match(self):
-        """'makine öğrenmesi' CS keyword'ü."""
         assert _matches_any("makine öğrenmesi nedir", _CS_KEYWORDS)
+
+    # YENİ: Science keyword testleri
+    def test_fotosentez_matches_science(self):
+        assert _matches_any("fotosentez nedir", _SCIENCE_KEYWORDS)
+
+    def test_newton_matches_science(self):
+        assert _matches_any("Newton'un 3. yasası", _SCIENCE_KEYWORDS)
+
+    def test_fotosentez_not_in_math(self):
+        assert not _matches_any("fotosentez nedir", _MATH_KEYWORDS)
 
     def test_opening_prompt_routes_correctly(self):
         math_prompt = get_opening_prompt("integrali anlat")
@@ -465,9 +462,34 @@ class TestKeywordMatching:
         assert "sade" in generic_prompt
 
     def test_bigram_opening_prompt_routes(self):
-        """Bigram keyword ile açılış prompt'u doğru route edilmeli."""
         math_prompt = get_opening_prompt("diferansiyel denklem nedir")
         assert "Sokratik" in math_prompt
+
+    # YENİ: Science route testi
+    def test_fotosentez_opening_prompt_routes_to_science(self):
+        science_prompt = get_opening_prompt("fotosentez nedir")
+        assert "doğa" in science_prompt or "gözlem" in science_prompt
+
+    def test_newton_opening_prompt_routes_to_science(self):
+        science_prompt = get_opening_prompt("Newton'un 3. yasası nedir")
+        assert "doğa" in science_prompt or "gözlem" in science_prompt
+
+
+class TestScienceRouting:
+    """Demo kavramlarının doğru route edildiğini doğrular."""
+
+    def test_fotosentez_routes_to_science_not_generic(self):
+        prompt = get_opening_prompt("Fotosentez")
+        # Science prompt'u "sade" içermez (generic branch'in işareti), doğal örnek içerir
+        assert "sade" not in prompt
+
+    def test_newton_routes_to_science(self):
+        prompt = get_opening_prompt("Newton'un 3. yasası")
+        assert "sade" not in prompt
+
+    def test_unrecognized_topic_stays_generic(self):
+        prompt = get_opening_prompt("Varoluşçuluk nedir")
+        assert "sade" in prompt
 
 
 class TestErrorRecovery:

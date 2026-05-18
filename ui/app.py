@@ -3,14 +3,12 @@ Münazara — Streamlit Arayüzü
 
 Çalıştırmak için: streamlit run ui/app.py
 
-Değişiklikler (v5):
-- is_streaming flag'i eklendi: streaming sırasında butonlar devre dışı bırakılır,
-  race condition önlenir.
-- Ana arayüze tur sayacı (progress bar + badge) eklendi.
-- Soru hakkı göstergesi: kaç hak kaldığını kullanıcı görür, bitince buton gizlenir.
-- Demo modunda indirilen .txt başlığına "DEMO" notu eklendi.
-- Orchestrator max_user_questions=3 ile oluşturuluyor; UI bunu yansıtıyor.
-- HF deployment için os.environ önceliği korunuyor (gemini_client.py'de zaten var).
+Düzeltmeler (v6):
+- reset_session() ikiye ayrıldı:
+    _archive_session() → mevcut tartışmayı geçmişe yazar (yan etki: history)
+    _clear_session()   → state'i sıfırlar (yan etki: session_state)
+  reset_session() bu ikisini sırayla çağırır; dışarıya API değişmez.
+- Diğer tüm logic v5 ile aynı.
 """
 
 import sys
@@ -48,14 +46,14 @@ class StreamState:
 def _init_state():
     defaults = {
         "orchestrator": None,
-        "messages": [],        # list[Message]
+        "messages": [],
         "user_asking": False,
         "history": [],
         "demo_mode": False,
         "current_topic": None,
         "max_rounds": 5,
         "debate_summary": None,
-        "is_streaming": False,  # FIX: race condition guard
+        "is_streaming": False,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -88,16 +86,25 @@ def show_message(msg: Message) -> None:
             st.info(msg.content)
 
 
-def reset_session(save_to_history: bool = True) -> None:
-    if (
-        save_to_history
-        and st.session_state.messages
-        and st.session_state.current_topic
-    ):
+# ----- Reset: ayrılmış sorumluluklar -----
+
+def _archive_session() -> None:
+    """
+    Mevcut tartışmayı geçmişe yazar.
+    Yan etki: yalnızca st.session_state.history'yi değiştirir.
+    """
+    if st.session_state.messages and st.session_state.current_topic:
         st.session_state.history.append({
             "topic": st.session_state.current_topic,
             "messages": list(st.session_state.messages),
         })
+
+
+def _clear_session() -> None:
+    """
+    Aktif tartışma state'ini sıfırlar.
+    Yan etki: yalnızca mevcut oturum değişkenlerini temizler; history'ye dokunmaz.
+    """
     st.session_state.messages = []
     st.session_state.orchestrator = None
     st.session_state.user_asking = False
@@ -105,6 +112,13 @@ def reset_session(save_to_history: bool = True) -> None:
     st.session_state.current_topic = None
     st.session_state.debate_summary = None
     st.session_state.is_streaming = False
+
+
+def reset_session(save_to_history: bool = True) -> None:
+    """Tartışmayı isteğe bağlı olarak arşivler ve state'i sıfırlar."""
+    if save_to_history:
+        _archive_session()
+    _clear_session()
 
 
 def get_download_text() -> str:
@@ -116,7 +130,6 @@ def get_download_text() -> str:
     }
     lines = []
 
-    # FIX: demo modunda başlığa not ekle
     if st.session_state.demo_mode:
         lines.append("=== DEMO TARTIŞMASI (gerçek API kullanılmamıştır) ===\n")
 
@@ -133,7 +146,6 @@ def get_download_text() -> str:
 
 
 def _show_turn_progress(orch: DebateOrchestrator) -> None:
-    """Tur sayacını ana arayüzde göster."""
     col_a, col_b, col_c = st.columns([2, 1, 1])
     with col_a:
         st.progress(
@@ -327,7 +339,6 @@ elif (
     orch = st.session_state.orchestrator
     st.divider()
 
-    # Tur sayacı — ana arayüzde görünür
     _show_turn_progress(orch)
 
     st.markdown("### 💬 Sıra sende!")
