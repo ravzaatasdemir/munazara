@@ -222,7 +222,7 @@ with st.sidebar:
                 use_container_width=True,
             )
 
-        if st.button("🔄 Yeni konu başlat", use_container_width=True):
+        if st.button("🔄 Yeni konu başlat", use_container_width=True, key="sidebar_new_topic"):
             reset_session(save_to_history=True)
             st.rerun()
 
@@ -523,6 +523,6 @@ elif (
 
     st.success("✅ Tartışma tamamlandı! Yeni bir konu başlatabilirsiniz.")
 
-    if st.button("🔄 Yeni konu başlat", use_container_width=True):
+    if st.button("🔄 Yeni konu başlat", use_container_width=True, key="finish_new_topic"):
         reset_session(save_to_history=True)
         st.rerun()
