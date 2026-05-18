@@ -155,7 +155,6 @@ topic_keywords:
     - döviz kuru
     - stagflasyon
     - fırsat maliyeti
-  # YENİ: Fen bilimleri kategorisi — demo_concepts.md'deki kavramları kapsar
   science:
     - fotosentez
     - newton
@@ -178,7 +177,6 @@ topic_keywords:
     - yerçekimi
     - bağışıklık
     - sinir sistemi
-    - fotosentez
     - solunum
     - mitoz
     - mayoz
