@@ -25,8 +25,9 @@ import queue
 sys.path.insert(0, os.path.dirname(__file__))
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from dotenv import load_dotenv
@@ -334,6 +335,19 @@ def get_demo():
         "topic": DEMO_TOPIC,
         "messages": [{"role": m["role"], "content": m["content"]} for m in DEMO_MESSAGES],
     }
+
+
+FRONTEND_DIST = os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+if os.path.exists(FRONTEND_DIST):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="assets")
+
+    @app.get("/")
+    def serve_frontend():
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
+
+    @app.get("/{full_path:path}")
+    def serve_spa(full_path: str):
+        return FileResponse(os.path.join(FRONTEND_DIST, "index.html"))
 
 
 if __name__ == "__main__":
