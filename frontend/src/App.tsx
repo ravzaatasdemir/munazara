@@ -410,7 +410,7 @@ export default function App() {
 
           {/* Student Bubble */}
           <div className={`w-full flex justify-end px-4 md:px-12 transition-all duration-300 ${showStudentBubble ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}>
-            <div className="pixel-border bg-surface-variant p-4 pixel-shadow-lg max-w-sm pointer-events-auto">
+            <div className="pixel-border bg-surface-variant p-4 pixel-shadow-lg max-w-sm pointer-events-auto max-h-32 overflow-y-auto">
               <p className="text-on-surface text-sm font-pixel">
                 <span className="font-bold text-secondary-dark text-base">Kamil: </span>
                 {studentBubbleText}
