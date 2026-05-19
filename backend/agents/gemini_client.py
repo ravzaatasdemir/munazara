@@ -28,7 +28,7 @@ from agents.exceptions import (
 
 load_dotenv()
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 _client = None
 _client_lock = threading.Lock()
 
